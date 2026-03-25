@@ -398,18 +398,23 @@ fn create_overlay_window(app: &AppHandle, x: i32, y: i32, width: u32, height: u3
     }
 
     let url = WebviewUrl::App("overlay.html".into());
-    let window = WebviewWindowBuilder::new(app, OVERLAY_WINDOW_LABEL, url)
+    let mut builder = WebviewWindowBuilder::new(app, OVERLAY_WINDOW_LABEL, url)
         .title("Translation Overlay")
         .decorations(false)
-        .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
         .focused(true)
         .visible(false)
         .position(0.0, 0.0)
-        .inner_size(100.0, 100.0)
-        .build()?;
+        .inner_size(100.0, 100.0);
+
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.transparent(true);
+    }
+
+    let window = builder.build()?;
     window.set_position(Position::Physical(PhysicalPosition::new(x, y)))?;
     window.set_size(Size::Physical(PhysicalSize::new(width, height)))?;
     window.show()?;
