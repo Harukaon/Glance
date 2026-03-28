@@ -1,1 +1,1 @@
-{"default-capability":{"identifier":"default-capability","description":"Allow local app windows to use Tauri core APIs.","local":true,"windows":["main","overlay","capture"],"permissions":["core:default"]}}
+{"default-capability":{"identifier":"default-capability","description":"Allow local app windows to use Tauri core APIs.","local":true,"windows":["main","overlay","capture"],"permissions":["core:default","core:window:allow-start-dragging","core:window:allow-hide","core:window:allow-show","core:window:allow-set-focus"]}}

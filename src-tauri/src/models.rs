@@ -158,6 +158,13 @@ pub struct TranslationHistoryItem {
     pub pairs: Vec<TranslationPair>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextTranslationResult {
+    pub translated_text: String,
+    pub from_lang_detected: String,
+}
+
 impl TranslationHistoryItem {
     pub fn from_response(
         selection: SelectionPayload,

@@ -12,7 +12,7 @@ use crate::app_state::SharedState;
 use crate::capture;
 use crate::capture_window::{self, CaptureCommand, CaptureEvent};
 use crate::error::{AppError, AppResult};
-use crate::models::{HistoryQuery, OverlayPayload, SelectionPayload, TranslationHistoryItem, TranslatorSettings};
+use crate::models::{HistoryQuery, OverlayPayload, SelectionPayload, TextTranslationResult, TranslationHistoryItem, TranslatorSettings};
 
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 
@@ -107,6 +107,28 @@ pub async fn list_history(
 #[tauri::command]
 pub async fn clear_history(state: State<'_, SharedState>) -> AppResult<()> {
     state.config_store.save_history(&[]).await
+}
+
+// ── Text translation ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn translate_text(
+    state: State<'_, SharedState>,
+    text: String,
+    from_lang: String,
+    to_lang: String,
+) -> AppResult<TextTranslationResult> {
+    state.google_client.translate(&text, &from_lang, &to_lang).await
+}
+
+// ── Window ──────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn hide_window(app: AppHandle) -> AppResult<()> {
+    if let Some(w) = app.get_webview_window("main") {
+        w.hide()?;
+    }
+    Ok(())
 }
 
 // ── Capture flow ────────────────────────────────────────────────────────────

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use reqwest::multipart::{Form, Part};
@@ -12,18 +14,15 @@ use crate::models::{
 };
 
 const IMAGE_TRANSLATE_SECRET: &str = "VPaHE3kX_vl4BhgYiu2n";
-const USER_AGENT: &str = "glance/0.1";
 
 #[derive(Debug, Clone)]
 pub struct YoudaoClient {
-    http: Client,
+    http: Arc<Client>,
 }
 
 impl YoudaoClient {
-    pub fn new() -> AppResult<Self> {
-        Ok(Self {
-            http: Client::builder().user_agent(USER_AGENT).build()?,
-        })
+    pub fn new(http: Arc<Client>) -> Self {
+        Self { http }
     }
 
     pub async fn translate_image_bytes(

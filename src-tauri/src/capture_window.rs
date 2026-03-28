@@ -441,7 +441,7 @@ fn redraw_session(session: &mut CaptureSession) {
                 sw,
                 sh,
             );
-            draw_border(&mut buffer, width, height, sx, sy, sw, sh, 0x007A6555, 2);
+            draw_border(&mut buffer, width, height, sx, sy, sw, sh, 0x004A9EFF, 2);
         }
     }
 
@@ -604,7 +604,7 @@ fn draw_spinner(
             if px >= 0 && py >= 0 && px < buf_w as i32 && py < buf_h as i32 {
                 let idx = py as usize * buf_w as usize + px as usize;
                 if idx < buf.len() {
-                    buf[idx] = 0x007A6555;
+                    buf[idx] = 0x004A9EFF;
                 }
             }
         }

@@ -7,6 +7,7 @@ mod capture_window;
 mod commands;
 mod config;
 mod error;
+mod google_translate;
 mod models;
 
 use std::path::PathBuf;
@@ -14,8 +15,8 @@ use std::path::PathBuf;
 use api::YoudaoClient;
 use app_state::SharedState;
 use commands::{
-    begin_capture, cancel_capture, clear_history, close_overlay, list_history,
-    load_overlay_payload, load_settings, save_settings, show_overlay,
+    begin_capture, cancel_capture, clear_history, close_overlay, hide_window, list_history,
+    load_overlay_payload, load_settings, save_settings, show_overlay, translate_text,
 };
 use config::ConfigStore;
 use models::TranslatorSettings;
@@ -54,8 +55,14 @@ fn main() {
                 commands::apply_autostart(&app_handle, settings.autostart);
                 commands::apply_hotkey(&app_handle, &settings.hotkey);
 
-                let api_client = YoudaoClient::new()?;
-                app_handle.manage(SharedState::new(config_store, settings, api_client));
+                let http = std::sync::Arc::new(
+                    reqwest::Client::builder()
+                        .user_agent("glance/0.1")
+                        .build()?,
+                );
+                let api_client = YoudaoClient::new(http.clone());
+                let google_client = google_translate::GoogleTranslateClient::new(http);
+                app_handle.manage(SharedState::new(config_store, settings, api_client, google_client));
                 Ok::<(), error::AppError>(())
             })?;
 
@@ -116,7 +123,9 @@ fn main() {
             cancel_capture,
             show_overlay,
             load_overlay_payload,
-            close_overlay
+            close_overlay,
+            translate_text,
+            hide_window
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
