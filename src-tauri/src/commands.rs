@@ -197,7 +197,7 @@ async fn handle_capture_events(
     rgba: Vec<u8>,
     img_w: u32,
     _img_h: u32,
-    _scale_factor: f64,
+    scale_factor: f64,
     state: SharedState,
     app: AppHandle,
 ) {
