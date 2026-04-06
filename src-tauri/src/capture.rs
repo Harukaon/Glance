@@ -21,12 +21,8 @@ pub struct PrimaryMonitorInfo {
 }
 
 /// Find the primary monitor (fast, ~5ms). Returns the Screen handle and display info.
+#[cfg(not(target_os = "macos"))]
 pub fn find_primary_screen() -> AppResult<PrimaryMonitorInfo> {
-    #[cfg(target_os = "macos")]
-    {
-        return find_primary_screen_macos();
-    }
-
     let t0 = std::time::Instant::now();
     let screens = CaptureScreen::all().map_err(|e| AppError::Capture(e.to_string()))?;
     tracing::info!("[PERF][capture] Screen::all(): {:?}", t0.elapsed());
@@ -53,12 +49,8 @@ pub fn find_primary_screen() -> AppResult<PrimaryMonitorInfo> {
 }
 
 /// Capture the screen to raw RGBA bytes in memory (no file I/O).
+#[cfg(not(target_os = "macos"))]
 pub fn capture_screen_to_memory(screen: CaptureScreen) -> AppResult<(Vec<u8>, u32, u32)> {
-    #[cfg(target_os = "macos")]
-    {
-        return capture_screen_to_memory_macos(screen);
-    }
-
     let t0 = std::time::Instant::now();
     let capture = screen
         .capture()
@@ -82,6 +74,16 @@ pub fn capture_screen_to_memory(screen: CaptureScreen) -> AppResult<(Vec<u8>, u3
     );
 
     Ok((rgba_bytes, w, h))
+}
+
+#[cfg(target_os = "macos")]
+pub fn find_primary_screen() -> AppResult<PrimaryMonitorInfo> {
+    find_primary_screen_macos()
+}
+
+#[cfg(target_os = "macos")]
+pub fn capture_screen_to_memory(screen: CaptureScreen) -> AppResult<(Vec<u8>, u32, u32)> {
+    capture_screen_to_memory_macos(screen)
 }
 
 #[cfg(target_os = "macos")]
