@@ -1,8 +1,11 @@
 use screenshots::Screen;
 #[cfg(target_os = "macos")]
-use std::{fs, process::Command};
+use std::{fs, path::PathBuf, process::Command};
 
 use crate::error::{AppError, AppResult};
+
+#[cfg(target_os = "macos")]
+const DEBUG_CAPTURE_DIR: &str = "/tmp/glance-debug/latest";
 
 /// Monitor info returned by find_primary_screen.
 pub struct PrimaryMonitorInfo {
@@ -74,9 +77,52 @@ pub fn capture_screen_to_memory(screen: Screen) -> AppResult<(Vec<u8>, u32, u32)
 }
 
 #[cfg(target_os = "macos")]
+pub fn debug_reset_dir() -> AppResult<PathBuf> {
+    let dir = PathBuf::from(DEBUG_CAPTURE_DIR);
+    if dir.exists() {
+        let _ = fs::remove_dir_all(&dir);
+    }
+    fs::create_dir_all(&dir)
+        .map_err(|e| AppError::Capture(format!("failed to create debug dir {DEBUG_CAPTURE_DIR}: {e}")))?;
+    Ok(dir)
+}
+
+#[cfg(target_os = "macos")]
+pub fn debug_dir() -> PathBuf {
+    PathBuf::from(DEBUG_CAPTURE_DIR)
+}
+
+#[cfg(target_os = "macos")]
+pub fn debug_log(message: impl AsRef<str>) {
+    let dir = PathBuf::from(DEBUG_CAPTURE_DIR);
+    let _ = fs::create_dir_all(&dir);
+    let log_path = dir.join("capture.log");
+    let line = format!("{}\n", message.as_ref());
+    use std::io::Write;
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn debug_write_bytes(file_name: &str, bytes: &[u8]) {
+    let dir = PathBuf::from(DEBUG_CAPTURE_DIR);
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(file_name), bytes);
+}
+
+#[cfg(target_os = "macos")]
 fn capture_screen_to_memory_macos(_screen: Screen) -> AppResult<(Vec<u8>, u32, u32)> {
     let t0 = std::time::Instant::now();
     let output_path = std::env::temp_dir().join(format!("glance-capture-{}.png", uuid::Uuid::new_v4()));
+    debug_log(format!(
+        "[capture] running: screencapture -x -m -t png {}",
+        output_path.display()
+    ));
 
     let output = Command::new("screencapture")
         .arg("-x")
@@ -87,8 +133,14 @@ fn capture_screen_to_memory_macos(_screen: Screen) -> AppResult<(Vec<u8>, u32, u
         .output()
         .map_err(|e| AppError::Capture(format!("failed to run screencapture: {e}")))?;
 
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    debug_log(format!(
+        "[capture] screencapture status={} stdout={:?} stderr={:?}",
+        output.status, stdout, stderr
+    ));
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(AppError::Capture(format!(
             "screencapture exited with status {}{}",
             output.status,
@@ -103,6 +155,7 @@ fn capture_screen_to_memory_macos(_screen: Screen) -> AppResult<(Vec<u8>, u32, u
     let png_bytes = fs::read(&output_path)
         .map_err(|e| AppError::Capture(format!("failed to read screencapture output: {e}")))?;
     let _ = fs::remove_file(&output_path);
+    debug_write_bytes("01_screencapture.png", &png_bytes);
 
     let image = image::load_from_memory(&png_bytes)
         .map_err(|e| AppError::Capture(format!("failed to decode screencapture output: {e}")))?
@@ -112,6 +165,12 @@ fn capture_screen_to_memory_macos(_screen: Screen) -> AppResult<(Vec<u8>, u32, u
     let w = image.width();
     let h = image.height();
     let rgba_bytes = image.into_raw();
+    debug_log(format!(
+        "[capture] decoded screencapture -> {}x{} rgba_bytes={}",
+        w,
+        h,
+        rgba_bytes.len()
+    ));
     tracing::info!(
         "[PERF][capture] raw RGBA bytes: {} ({:.1} MB), {}x{}",
         rgba_bytes.len(),

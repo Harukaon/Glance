@@ -157,17 +157,26 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
         let _ = w.close();
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        let dir = capture::debug_reset_dir()?;
+        capture::debug_log(format!("[begin] debug dir={}", dir.display()));
+    }
+
     let t0 = std::time::Instant::now();
 
     #[cfg(target_os = "macos")]
     let restore_main_window = if let Some(main_window) = app.get_webview_window("main") {
         let was_visible = main_window.is_visible().unwrap_or(false);
+        capture::debug_log(format!("[begin] main window visible before capture={was_visible}"));
         if was_visible {
             let _ = main_window.hide();
             tokio::time::sleep(Duration::from_millis(120)).await;
+            capture::debug_log("[begin] hid main window and waited 120ms");
         }
         was_visible
     } else {
+        capture::debug_log("[begin] main window missing");
         false
     };
 
@@ -180,6 +189,11 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
         t0.elapsed(),
         monitor.scale_factor
     );
+    #[cfg(target_os = "macos")]
+    capture::debug_log(format!(
+        "[begin] primary monitor x={} y={} width={} height={} scale_factor={}",
+        monitor.x, monitor.y, monitor.width, monitor.height, monitor.scale_factor
+    ));
 
     let scale_factor = monitor.scale_factor;
     #[cfg(target_os = "macos")]
@@ -203,6 +217,13 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
         h,
         rgba.len() as f64 / 1_048_576.0
     );
+    #[cfg(target_os = "macos")]
+    capture::debug_log(format!(
+        "[begin] capture_to_memory -> {}x{} rgba_bytes={}",
+        w,
+        h,
+        rgba.len()
+    ));
 
     #[cfg(target_os = "macos")]
     {
@@ -217,6 +238,13 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
         });
 
         create_capture_window(app, monitor_x, monitor_y, monitor_width.max(w), monitor_height.max(h))?;
+        capture::debug_log(format!(
+            "[begin] capture window shown at x={} y={} width={} height={}",
+            monitor_x,
+            monitor_y,
+            monitor_width.max(w),
+            monitor_height.max(h)
+        ));
         tracing::info!("[PERF] start_capture_webview: {:?}", t0.elapsed());
     }
 
@@ -270,6 +298,18 @@ pub async fn submit_capture_selection(
                 .as_ref()
                 .ok_or_else(|| AppError::Capture("capture session missing".into()))?;
 
+            #[cfg(target_os = "macos")]
+            capture::debug_log(format!(
+                "[select] x={} y={} width={} height={} source_image={}x{} scale_factor={}",
+                selection.x,
+                selection.y,
+                selection.width,
+                selection.height,
+                session.img_w,
+                session.img_h,
+                session.scale_factor
+            ));
+
             (
                 capture_window::crop_rgba(
                     &session.rgba,
@@ -284,6 +324,8 @@ pub async fn submit_capture_selection(
         };
 
         let png_bytes = encode_cropped_png(crop, selection.width, selection.height).await?;
+        #[cfg(target_os = "macos")]
+        capture::debug_write_bytes("03_crop.png", &png_bytes);
         let image_base64 =
             translate_capture_png(state.inner(), png_bytes, &selection, scale_factor).await?;
 
@@ -300,6 +342,8 @@ pub async fn submit_capture_selection(
             Ok(payload)
         }
         Err(err) => {
+            #[cfg(target_os = "macos")]
+            capture::debug_log(format!("[select] error={err}"));
             emit_workflow_state(&app, "翻译失败", "error", false).ok();
             Err(err)
         }
@@ -396,6 +440,8 @@ async fn handle_capture_events(
 pub async fn cancel_capture(app: AppHandle, state: State<'_, SharedState>) -> AppResult<()> {
     #[cfg(target_os = "macos")]
     restore_main_window_if_needed(&app, state.inner()).await;
+    #[cfg(target_os = "macos")]
+    capture::debug_log("[cancel] capture cancelled");
 
     reset_capture_state(state.inner()).await;
 
@@ -454,6 +500,8 @@ pub async fn close_overlay(app: AppHandle, state: State<'_, SharedState>) -> App
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 async fn reset_capture_state(state: &SharedState) {
+    #[cfg(target_os = "macos")]
+    capture::debug_log("[state] reset capture state");
     *state.capture_in_progress.write().await = false;
     *state.capture_session.write().await = None;
 }
@@ -472,6 +520,7 @@ async fn restore_main_window_if_needed(app: &AppHandle, state: &SharedState) {
         if let Some(main_window) = app.get_webview_window("main") {
             let _ = main_window.show();
             let _ = main_window.set_focus();
+            capture::debug_log("[state] restored main window");
         }
     }
 }
@@ -481,6 +530,13 @@ async fn build_capture_preview_base64(rgba: Vec<u8>, w: u32, h: u32) -> AppResul
     let png_bytes = tokio::task::spawn_blocking(move || capture_window::encode_png(&rgba, w, h))
         .await
         .map_err(|e| AppError::Capture(format!("preview encode task failed: {e}")))??;
+    capture::debug_write_bytes("02_preview.png", &png_bytes);
+    capture::debug_log(format!(
+        "[preview] encoded preview png width={} height={} bytes={}",
+        w,
+        h,
+        png_bytes.len()
+    ));
     Ok(BASE64_STANDARD.encode(png_bytes))
 }
 
@@ -531,10 +587,24 @@ async fn translate_capture_png(
         response.rendered_image_base64.len(),
         response.regions.len()
     );
+    #[cfg(target_os = "macos")]
+    capture::debug_log(format!(
+        "[translate] request_id={} rendered_b64_len={} regions={}",
+        response.request_id,
+        response.rendered_image_base64.len(),
+        response.regions.len()
+    ));
 
     if let Ok(mut history) = state.config_store.load_history().await {
         history.push(response.history_item.clone());
         let _ = state.config_store.save_history(&history).await;
+    }
+
+    #[cfg(target_os = "macos")]
+    if !response.rendered_image_base64.is_empty() {
+        if let Ok(bytes) = BASE64_STANDARD.decode(&response.rendered_image_base64) {
+            capture::debug_write_bytes("04_translated.jpg", &bytes);
+        }
     }
 
     Ok(response.rendered_image_base64)
