@@ -30,10 +30,7 @@
   "bundle": {
     "active": true,
     "icon": ["icons/icon.png", "icons/icon.ico"],
-    "targets": "all",
-    "macOS": {
-      "signingIdentity": "-"
-    }
+    "targets": "all"
   },
   "plugins": {
     "global-shortcut": null,

@@ -1,6 +1,9 @@
-use screenshots::Screen;
 #[cfg(target_os = "macos")]
-use std::{fs, path::PathBuf, process::Command};
+use xcap::Monitor as CaptureScreen;
+#[cfg(not(target_os = "macos"))]
+use screenshots::Screen as CaptureScreen;
+#[cfg(target_os = "macos")]
+use std::{fs, io::Cursor, path::PathBuf};
 
 use crate::error::{AppError, AppResult};
 
@@ -9,7 +12,7 @@ const DEBUG_CAPTURE_DIR: &str = "/tmp/glance-debug/latest";
 
 /// Monitor info returned by find_primary_screen.
 pub struct PrimaryMonitorInfo {
-    pub screen: Screen,
+    pub screen: CaptureScreen,
     pub scale_factor: f64,
     pub x: i32,
     pub y: i32,
@@ -19,8 +22,13 @@ pub struct PrimaryMonitorInfo {
 
 /// Find the primary monitor (fast, ~5ms). Returns the Screen handle and display info.
 pub fn find_primary_screen() -> AppResult<PrimaryMonitorInfo> {
+    #[cfg(target_os = "macos")]
+    {
+        return find_primary_screen_macos();
+    }
+
     let t0 = std::time::Instant::now();
-    let screens = Screen::all().map_err(|e| AppError::Capture(e.to_string()))?;
+    let screens = CaptureScreen::all().map_err(|e| AppError::Capture(e.to_string()))?;
     tracing::info!("[PERF][capture] Screen::all(): {:?}", t0.elapsed());
 
     let primary = screens
@@ -45,7 +53,7 @@ pub fn find_primary_screen() -> AppResult<PrimaryMonitorInfo> {
 }
 
 /// Capture the screen to raw RGBA bytes in memory (no file I/O).
-pub fn capture_screen_to_memory(screen: Screen) -> AppResult<(Vec<u8>, u32, u32)> {
+pub fn capture_screen_to_memory(screen: CaptureScreen) -> AppResult<(Vec<u8>, u32, u32)> {
     #[cfg(target_os = "macos")]
     {
         return capture_screen_to_memory_macos(screen);
@@ -74,6 +82,38 @@ pub fn capture_screen_to_memory(screen: Screen) -> AppResult<(Vec<u8>, u32, u32)
     );
 
     Ok((rgba_bytes, w, h))
+}
+
+#[cfg(target_os = "macos")]
+fn find_primary_screen_macos() -> AppResult<PrimaryMonitorInfo> {
+    let t0 = std::time::Instant::now();
+    let monitors = CaptureScreen::all().map_err(|e| AppError::Capture(e.to_string()))?;
+    tracing::info!("[PERF][capture] Monitor::all(): {:?}", t0.elapsed());
+
+    let primary = monitors
+        .into_iter()
+        .find(|monitor| monitor.is_primary().unwrap_or(false))
+        .ok_or_else(|| AppError::Capture("no primary monitor found".into()))?;
+
+    let scale_factor = primary.scale_factor().unwrap_or(1.0) as f64;
+    let x = primary.x().unwrap_or(0);
+    let y = primary.y().unwrap_or(0);
+    let width = primary.width().unwrap_or(0);
+    let height = primary.height().unwrap_or(0);
+
+    debug_log(format!(
+        "[monitor] primary x={} y={} width={} height={} scale_factor={}",
+        x, y, width, height, scale_factor
+    ));
+
+    Ok(PrimaryMonitorInfo {
+        screen: primary,
+        scale_factor,
+        x,
+        y,
+        width,
+        height,
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -116,57 +156,20 @@ pub fn debug_write_bytes(file_name: &str, bytes: &[u8]) {
 }
 
 #[cfg(target_os = "macos")]
-fn capture_screen_to_memory_macos(_screen: Screen) -> AppResult<(Vec<u8>, u32, u32)> {
+fn capture_screen_to_memory_macos(screen: CaptureScreen) -> AppResult<(Vec<u8>, u32, u32)> {
     let t0 = std::time::Instant::now();
-    let output_path = std::env::temp_dir().join(format!("glance-capture-{}.png", uuid::Uuid::new_v4()));
-    debug_log(format!(
-        "[capture] running: screencapture -x -m -t png {}",
-        output_path.display()
-    ));
-
-    let output = Command::new("screencapture")
-        .arg("-x")
-        .arg("-m")
-        .arg("-t")
-        .arg("png")
-        .arg(&output_path)
-        .output()
-        .map_err(|e| AppError::Capture(format!("failed to run screencapture: {e}")))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    debug_log(format!(
-        "[capture] screencapture status={} stdout={:?} stderr={:?}",
-        output.status, stdout, stderr
-    ));
-
-    if !output.status.success() {
-        return Err(AppError::Capture(format!(
-            "screencapture exited with status {}{}",
-            output.status,
-            if stderr.is_empty() {
-                String::new()
-            } else {
-                format!(": {stderr}")
-            }
-        )));
-    }
-
-    let png_bytes = fs::read(&output_path)
-        .map_err(|e| AppError::Capture(format!("failed to read screencapture output: {e}")))?;
-    let _ = fs::remove_file(&output_path);
-    debug_write_bytes("01_screencapture.png", &png_bytes);
-
-    let image = image::load_from_memory(&png_bytes)
-        .map_err(|e| AppError::Capture(format!("failed to decode screencapture output: {e}")))?
-        .into_rgba8();
-
-    tracing::info!("[PERF][capture] screencapture -m: {:?}", t0.elapsed());
+    let image = screen
+        .capture_image()
+        .map_err(|e| AppError::Capture(format!("xcap capture_image failed: {e}")))?;
+    tracing::info!("[PERF][capture] xcap capture_image(): {:?}", t0.elapsed());
     let w = image.width();
     let h = image.height();
+    if let Ok(png_bytes) = encode_rgba_png(image.clone()) {
+        debug_write_bytes("01_xcap_capture.png", &png_bytes);
+    }
     let rgba_bytes = image.into_raw();
     debug_log(format!(
-        "[capture] decoded screencapture -> {}x{} rgba_bytes={}",
+        "[capture] xcap capture -> {}x{} rgba_bytes={}",
         w,
         h,
         rgba_bytes.len()
@@ -180,4 +183,13 @@ fn capture_screen_to_memory_macos(_screen: Screen) -> AppResult<(Vec<u8>, u32, u
     );
 
     Ok((rgba_bytes, w, h))
+}
+
+#[cfg(target_os = "macos")]
+fn encode_rgba_png(image: image::RgbaImage) -> AppResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    image
+        .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .map_err(|e| AppError::Capture(format!("debug png encode failed: {e}")))?;
+    Ok(bytes)
 }

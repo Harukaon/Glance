@@ -27,6 +27,10 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
 uuid = { version = "1.12.1", features = ["serde", "v4"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25"
+xcap = "0.9"
+
 [features]
 default = []
 
@@ -42,4 +46,7 @@ opt-level = 2
 opt-level = 2
 
 [profile.dev.package.winit]
+opt-level = 2
+
+[profile.dev.package.xcap]
 opt-level = 2

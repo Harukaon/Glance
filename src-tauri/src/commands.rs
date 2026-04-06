@@ -14,6 +14,8 @@ use crate::app_state::SharedState;
 use crate::capture;
 use crate::capture_window::{self, CaptureCommand, CaptureEvent};
 use crate::error::{AppError, AppResult};
+#[cfg(target_os = "macos")]
+use crate::macos_permissions;
 use crate::models::{
     CaptureRect, CaptureTranslatePayload, CaptureViewPayload, HistoryQuery, OverlayPayload,
     SelectionPayload, TextTranslationResult, TranslationHistoryItem, TranslatorSettings,
@@ -161,6 +163,15 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
     {
         let dir = capture::debug_reset_dir()?;
         capture::debug_log(format!("[begin] debug dir={}", dir.display()));
+        let has_permission = macos_permissions::has_screen_recording_permission();
+        capture::debug_log(format!("[begin] preflight permission={has_permission}"));
+        if !has_permission {
+            let requested = macos_permissions::request_screen_recording_permission();
+            capture::debug_log(format!("[begin] request permission returned={requested}"));
+            return Err(AppError::Capture(
+                "screen recording permission is required on macOS. Grant it in System Settings, then reopen Glance.".into(),
+            ));
+        }
     }
 
     let t0 = std::time::Instant::now();

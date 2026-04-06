@@ -7,29 +7,15 @@
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use core_graphics::access::ScreenCaptureAccess;
     use std::process::Command;
 
-    /// Check if screen recording permission is currently granted.
-    ///
-    /// Uses CoreGraphics' `CGPreflightScreenCaptureAccess()` via direct
-    /// linking (available on macOS 10.15+).
-    #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
-        fn CGPreflightScreenCaptureAccess() -> bool;
-        fn CGRequestScreenCaptureAccess() -> bool;
-    }
-
     pub fn has_screen_recording_permission() -> bool {
-        unsafe { CGPreflightScreenCaptureAccess() }
+        ScreenCaptureAccess::default().preflight()
     }
 
-    /// Request screen recording permission programmatically.
-    ///
-    /// This triggers the macOS permission dialog. It returns immediately;
-    /// the actual permission grant happens asynchronously when the user
-    /// accepts. Also opens System Preferences as a fallback hint.
     pub fn request_screen_recording_permission() -> bool {
-        let granted = unsafe { CGRequestScreenCaptureAccess() };
+        let granted = ScreenCaptureAccess::default().request();
         if !granted {
             // Also open System Preferences as a user-friendly hint.
             Command::new("open")
