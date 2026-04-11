@@ -49,11 +49,11 @@ jobs:
       - name: Build
         run: cargo tauri build --target ${{ matrix.target }}
 
-      - name: Strip signatures and package ZIP (macOS only)
+      - name: Force Ad-hoc signing (macOS only)
         if: startsWith(matrix.platform, 'macos')
         run: |
-          # Remove problematic ad-hoc signatures that cause 'Damaged' errors on other machines
-          find src-tauri/target/${{ matrix.target }}/release/bundle/macos -name "*.app" -exec codesign --remove-signature {} \;
+          # Use force ad-hoc signing to ensure the bundle is structurally valid on ARM64
+          find src-tauri/target/${{ matrix.target }}/release/bundle/macos -name "*.app" -exec codesign --force --deep --sign - {} \;
           # Create a ZIP as a more reliable alternative for unsigned apps
           cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
           zip -r ../../../../../glance-${{ matrix.label }}.zip Glance.app

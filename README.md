@@ -84,26 +84,22 @@ cargo tauri build
 
 产物在 `src-tauri/target/release/bundle/` 下。
 
-## macOS 分发说明
+## macOS 安装说明
 
-Glance 当前采用 **ad-hoc 签名**，不走 App Store，也不依赖 Apple Developer 付费证书。
+由于 Glance 尚未启用付费开发者证书签名（不走 App Store），在 macOS 上首次下载安装后会触发系统安全拦截。
 
-这意味着：
-
-- 应用在 macOS 上应当可以正常安装和运行
-- 首次从浏览器、聊天工具或网盘下载后，系统仍可能提示“无法验证开发者”或要求到 **系统设置 > 隐私与安全性** 里手动允许
-- 如果系统仍提示“已损坏”，通常是下载链路附带了 quarantine 标记或压缩/传输过程破坏了应用包，可在终端执行：
+### 处理“已损坏，无法打开”报错
+如果您通过浏览器下载后提示“已损坏，无法打开”，这通常是因为 macOS Gatekeeper 对未签名应用的严格隔离。请在终端执行以下命令：
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/Glance.app
+sudo xattr -cr /Applications/Glance.app
 ```
 
-更稳妥的首次打开方式：
-
-1. 将 `Glance.app` 拖入 `Applications`
-2. 在访达中右键 `Glance.app`
-3. 选择“打开”
-4. 若仍被拦截，到 **系统设置 > 隐私与安全性** 中点“仍要打开”
+### 首次运行提示“无法验证开发者”
+1. 将 `Glance.app` 拖入 `Applications`（应用程序）文件夹。
+2. **不要直接双击打开**，而是在访达（Finder）中**右键点击** `Glance.app`，选择“打开”。
+3. 在弹出的对话框中再次选择“打开”。
+4. 如果依然无法运行，请前往 **系统设置 > 隐私与安全性**，点击下方的“仍要打开”。
 
 ## 许可证
 
