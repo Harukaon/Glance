@@ -222,7 +222,7 @@ fn capture_screen_with_preview_macos(_screen: CaptureScreen) -> AppResult<Captur
     let capture_path = temp_capture_path("jpg");
 
     let status = Command::new("screencapture")
-        .args(["-x", "-t", "jpg", capture_path.to_string_lossy().as_ref()])
+        .args(["-x", "-m", "-t", "jpg", capture_path.to_string_lossy().as_ref()])
         .status()
         .map_err(|e| AppError::Capture(format!("failed to run screencapture: {e}")))?;
 
