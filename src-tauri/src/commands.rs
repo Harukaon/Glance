@@ -263,25 +263,25 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
 
     #[cfg(target_os = "macos")]
     {
-        let monitor = tokio::task::spawn_blocking(capture::find_primary_screen)
+        let monitor = tokio::task::spawn_blocking(capture::find_cursor_monitor)
             .await
             .map_err(|e| AppError::Capture(format!("find monitor task failed: {e}")))??;
 
         tracing::info!(
-            "[PERF] find_primary_screen: {:?} (scale={})",
+            "[PERF] find_cursor_monitor: {:?} (scale={})",
             t0.elapsed(),
             monitor.scale_factor
         );
         capture::debug_log(format!(
-            "[begin] primary monitor x={} y={} width={} height={} scale_factor={}",
-            monitor.x, monitor.y, monitor.width, monitor.height, monitor.scale_factor
+            "[begin] cursor monitor x={} y={} width={} height={} scale_factor={} display_id={}",
+            monitor.x, monitor.y, monitor.width, monitor.height, monitor.scale_factor, monitor.display_id
         ));
-        capture_timeline(&t0, "primary monitor resolved");
+        capture_timeline(&t0, "cursor monitor resolved");
 
         let scale_factor = monitor.scale_factor;
-        let screen = monitor.screen;
+        let display_id = monitor.display_id;
 
-        let captured = tokio::task::spawn_blocking(move || capture::capture_screen_with_preview(screen))
+        let captured = tokio::task::spawn_blocking(move || capture::capture_screen_with_preview(display_id))
             .await
             .map_err(|e| AppError::Capture(format!("capture task failed: {e}")))??;
         let rgba = captured.rgba_bytes;
@@ -338,6 +338,11 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
             img_w: w,
             img_h: h,
             scale_factor,
+            monitor_x: monitor.x,
+            monitor_y: monitor.y,
+            monitor_width: monitor.width,
+            monitor_height: monitor.height,
+            display_id,
             preview_image_base64: Some(preview_image_base64),
             preview_image_mime,
             restore_main_window,
@@ -351,18 +356,19 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let monitor = tokio::task::spawn_blocking(capture::find_primary_screen)
+        let result = tokio::task::spawn_blocking(capture::find_cursor_monitor)
             .await
             .map_err(|e| AppError::Capture(format!("find monitor task failed: {e}")))??;
 
+        let monitor = result.monitor;
         tracing::info!(
-            "[PERF] find_primary_screen: {:?} (scale={})",
+            "[PERF] find_cursor_monitor: {:?} (scale={})",
             t0.elapsed(),
             monitor.scale_factor
         );
 
         let scale_factor = monitor.scale_factor;
-        let screen = monitor.screen;
+        let screen = result.screen;
 
         let (rgba, w, h) =
             tokio::task::spawn_blocking(move || capture::capture_screen_to_memory(screen))
@@ -378,7 +384,7 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
         );
 
         let (event_tx, event_rx) = mpsc::channel::<CaptureEvent>();
-        capture_window::start_capture(rgba.clone(), w, h, scale_factor, event_tx);
+        capture_window::start_capture(rgba.clone(), w, h, scale_factor, monitor.x, monitor.y, event_tx);
         tracing::info!("[PERF] start_capture_native: {:?}", t0.elapsed());
 
         let state_clone = state.clone();
@@ -710,7 +716,19 @@ async fn translate_capture_png(
     rect: &CaptureRect,
     scale_factor: f64,
 ) -> AppResult<String> {
-    let settings = state.settings.read().await.clone();
+    let (settings, monitor_x, monitor_y, monitor_width, monitor_height) = {
+        let guard = state.capture_session.read().await;
+        let session = guard
+            .as_ref()
+            .ok_or_else(|| AppError::Capture("capture session missing".into()))?;
+        (
+            state.settings.read().await.clone(),
+            session.monitor_x,
+            session.monitor_y,
+            session.monitor_width,
+            session.monitor_height,
+        )
+    };
     let response = state
         .api_client
         .translate_image_bytes(
@@ -728,10 +746,10 @@ async fn translate_capture_png(
                     "capture:{}:{}:{}:{}",
                     rect.x, rect.y, rect.width, rect.height
                 ),
-                monitor_x: rect.x as i32,
-                monitor_y: rect.y as i32,
-                monitor_width: rect.width,
-                monitor_height: rect.height,
+                monitor_x,
+                monitor_y,
+                monitor_width,
+                monitor_height,
                 monitor_scale_factor: scale_factor,
             },
             None,

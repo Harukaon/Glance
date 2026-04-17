@@ -13,7 +13,15 @@ pub struct ActiveCaptureSession {
     pub img_w: u32,
     pub img_h: u32,
     pub scale_factor: f64,
+    pub monitor_x: i32,
+    pub monitor_y: i32,
+    pub monitor_width: u32,
+    pub monitor_height: u32,
+    #[cfg(target_os = "macos")]
+    pub display_id: u32,
+    #[cfg(target_os = "macos")]
     pub preview_image_base64: Option<String>,
+    #[cfg(target_os = "macos")]
     pub preview_image_mime: String,
     #[cfg(target_os = "macos")]
     pub restore_main_window: bool,

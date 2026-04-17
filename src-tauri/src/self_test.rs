@@ -60,7 +60,18 @@ pub fn run_capture_self_test() -> AppResult<CaptureSelfTestResult> {
     let output_dir = reset_output_dir(PathBuf::from(SELF_TEST_DIR))?;
 
     let find_started = Instant::now();
-    let monitor = capture::find_primary_screen()?;
+
+    #[cfg(target_os = "macos")]
+    let (monitor, screen_for_capture) = {
+        let monitor = capture::find_primary_screen()?;
+        (monitor, monitor.display_id)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (monitor, screen_for_capture) = {
+        let result = capture::find_primary_screen()?;
+        (result.monitor, result.screen)
+    };
+
     let find_monitor_ms = find_started.elapsed().as_millis();
 
     let scale_factor = monitor.scale_factor;
@@ -68,10 +79,12 @@ pub fn run_capture_self_test() -> AppResult<CaptureSelfTestResult> {
     let monitor_y = monitor.y;
     let monitor_width = monitor.width;
     let monitor_height = monitor.height;
-    let screen = monitor.screen;
 
     let capture_started = Instant::now();
-    let (rgba, width, height) = capture::capture_screen_to_memory(screen)?;
+    #[cfg(target_os = "macos")]
+    let (rgba, width, height) = capture::capture_screen_to_memory(screen_for_capture)?;
+    #[cfg(not(target_os = "macos"))]
+    let (rgba, width, height) = capture::capture_screen_to_memory(screen_for_capture)?;
     let capture_ms = capture_started.elapsed().as_millis();
 
     let expected_rgba_bytes = (width as usize) * (height as usize) * 4;
@@ -138,6 +151,7 @@ pub fn run_capture_smoke_test() -> AppResult<CaptureSmokeTestResult> {
 
         let capture_started = Instant::now();
         let interactive = capture::capture_interactive_region()?;
+
         let capture_ms = capture_started.elapsed().as_millis();
 
         let result = match interactive {

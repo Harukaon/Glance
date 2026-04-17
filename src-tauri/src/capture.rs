@@ -1,5 +1,6 @@
 #[cfg(not(target_os = "macos"))]
 use screenshots::Screen as CaptureScreen;
+
 #[cfg(target_os = "macos")]
 use std::{
     fs,
@@ -8,25 +9,28 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
-#[cfg(target_os = "macos")]
-pub struct MockMonitor {}
-
-#[cfg(target_os = "macos")]
-type CaptureScreen = MockMonitor;
 
 use crate::error::{AppError, AppResult};
 
 #[cfg(target_os = "macos")]
 const DEBUG_CAPTURE_DIR: &str = "/tmp/glance-debug/latest";
 
-/// Monitor info returned by find_primary_screen.
-pub struct PrimaryMonitorInfo {
-    pub screen: CaptureScreen,
+/// Monitor info returned by find_cursor_monitor / find_primary_screen.
+#[derive(Clone, Copy)]
+pub struct MonitorInfo {
     pub scale_factor: f64,
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    #[cfg(target_os = "macos")]
+    pub display_id: u32,
+}
+
+#[cfg(not(target_os = "macos"))]
+pub struct CursorMonitorResult {
+    pub screen: CaptureScreen,
+    pub monitor: MonitorInfo,
 }
 
 #[cfg(target_os = "macos")]
@@ -46,9 +50,110 @@ pub struct CapturedScreenImage {
     pub height: u32,
 }
 
-/// Find the primary monitor (fast, ~5ms). Returns the Screen handle and display info.
+// ── Cursor-aware monitor detection ──────────────────────────────────────────
+
+/// Find the monitor that the cursor is currently on.
 #[cfg(not(target_os = "macos"))]
-pub fn find_primary_screen() -> AppResult<PrimaryMonitorInfo> {
+pub fn find_cursor_monitor() -> AppResult<CursorMonitorResult> {
+    let (cursor_x, cursor_y) = get_cursor_position()
+        .map_err(|e| AppError::Capture(format!("failed to get cursor position: {e}")))?;
+
+    // Screen::from_point finds the screen containing the given point
+    let screen = CaptureScreen::from_point(cursor_x, cursor_y)
+        .map_err(|e| AppError::Capture(format!("no screen at cursor ({cursor_x},{cursor_y}): {e}")))?;
+
+    let info = &screen.display_info;
+    Ok(CursorMonitorResult {
+        screen,
+        monitor: MonitorInfo {
+            scale_factor: info.scale_factor as f64,
+            x: info.x,
+            y: info.y,
+            width: info.width,
+            height: info.height,
+        },
+    })
+}
+
+/// Find the monitor that the cursor is currently on.
+#[cfg(target_os = "macos")]
+pub fn find_cursor_monitor() -> AppResult<MonitorInfo> {
+    use core_graphics::display::CGDisplay;
+    use core_graphics::geometry::CGPoint;
+
+    let t0 = std::time::Instant::now();
+
+    // Get cursor position via NSEvent (AppKit coords: lower-left origin, Y up).
+    // CGDisplay::bounds() uses CG coords: upper-left origin, Y down.
+    // We need to convert: cg_y = main_bounds.origin.y + main_bounds.size.height - ns_y
+    let main_display = CGDisplay::main();
+    let main_bounds = main_display.bounds();
+
+    let ns_point = unsafe { objc2_app_kit::NSEvent::mouseLocation() };
+    let cg_x = ns_point.x;
+    let cg_y = main_bounds.origin.y + main_bounds.size.height - ns_point.y;
+    let cg_point = CGPoint::new(cg_x, cg_y);
+
+    debug_log(format!(
+        "[monitor] cursor ns=({}, {}) cg=({}, {})",
+        ns_point.x, ns_point.y, cg_x, cg_y
+    ));
+
+    // Find which display contains this CG point
+    match CGDisplay::displays_with_point(cg_point, 16) {
+        Ok((display_ids, count)) if count > 0 => {
+            for &id in &display_ids[..count as usize] {
+                let display = CGDisplay::new(id);
+                if !display.is_active() {
+                    continue;
+                }
+                // Skip mirrored displays — prefer the primary in a mirror set
+                if display.is_in_mirror_set() && display.mirrors_display() != 0 {
+                    continue;
+                }
+
+                let bounds = display.bounds();
+                let logical_w = bounds.size.width;
+                let pixels_w = display.pixels_wide();
+                let scale_factor = if logical_w > 0.0 {
+                    (pixels_w as f64) / logical_w
+                } else {
+                    1.0
+                };
+
+                debug_log(format!(
+                    "[monitor] found cursor display id={} x={} y={} w={} h={} scale={}",
+                    id,
+                    bounds.origin.x,
+                    bounds.origin.y,
+                    bounds.size.width,
+                    bounds.size.height,
+                    scale_factor
+                ));
+
+                tracing::info!("[PERF][capture] find_cursor_monitor: {:?}", t0.elapsed());
+
+                return Ok(MonitorInfo {
+                    scale_factor,
+                    x: bounds.origin.x as i32,
+                    y: bounds.origin.y as i32,
+                    width: logical_w as u32,
+                    height: bounds.size.height as u32,
+                    display_id: id,
+                });
+            }
+        }
+        _ => {}
+    }
+
+    // Fallback to main display
+    debug_log("[monitor] no display found for cursor, falling back to main");
+    find_primary_screen()
+}
+
+/// Find the primary monitor (fallback / self-test).
+#[cfg(not(target_os = "macos"))]
+pub fn find_primary_screen() -> AppResult<CursorMonitorResult> {
     let t0 = std::time::Instant::now();
     let screens = CaptureScreen::all().map_err(|e| AppError::Capture(e.to_string()))?;
     tracing::info!("[PERF][capture] Screen::all(): {:?}", t0.elapsed());
@@ -64,15 +169,137 @@ pub fn find_primary_screen() -> AppResult<PrimaryMonitorInfo> {
     let width = primary.display_info.width;
     let height = primary.display_info.height;
 
-    Ok(PrimaryMonitorInfo {
+    Ok(CursorMonitorResult {
         screen: primary,
+        monitor: MonitorInfo {
+            scale_factor,
+            x,
+            y,
+            width,
+            height,
+        },
+    })
+}
+
+/// Find the primary monitor (fallback / self-test).
+#[cfg(target_os = "macos")]
+pub fn find_primary_screen() -> AppResult<MonitorInfo> {
+    use core_graphics::display::CGDisplay;
+
+    let t0 = std::time::Instant::now();
+    let main_display = CGDisplay::main();
+    let bounds = main_display.bounds();
+
+    let logical_w = bounds.size.width;
+    let logical_h = bounds.size.height;
+    let pixels_w = main_display.pixels_wide();
+
+    let scale_factor = if logical_w > 0.0 {
+        (pixels_w as f64) / logical_w
+    } else {
+        1.0
+    };
+
+    let x = bounds.origin.x as i32;
+    let y = bounds.origin.y as i32;
+    let width = logical_w as u32;
+    let height = logical_h as u32;
+
+    tracing::info!("[PERF][capture] CGDisplay::main: {:?}", t0.elapsed());
+
+    debug_log(format!(
+        "[monitor] primary x={} y={} width={} height={} scale_factor={}",
+        x, y, width, height, scale_factor
+    ));
+
+    Ok(MonitorInfo {
         scale_factor,
         x,
         y,
         width,
         height,
+        display_id: main_display.id,
     })
 }
+
+// ── Cursor position (non-macOS) ─────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+fn get_cursor_position() -> Result<(i32, i32), String> {
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+    extern "system" {
+        fn GetCursorPos(lpPoint: *mut Point) -> i32;
+    }
+    let mut pt = Point { x: 0, y: 0 };
+    let result = unsafe { GetCursorPos(&mut pt) };
+    if result == 0 {
+        return Err("GetCursorPos failed".into());
+    }
+    Ok((pt.x, pt.y))
+}
+
+#[cfg(target_os = "linux")]
+fn get_cursor_position() -> Result<(i32, i32), String> {
+    // On Linux X11, use XQueryPointer to get cursor position.
+    // Fall back to (0, 0) which will resolve to the primary display.
+    // Wayland does not expose global cursor coordinates; from_point
+    // will still find a valid display.
+    #[cfg(feature = "x11")]
+    {
+        // Attempt X11 if available
+        use std::ffi::c_void;
+        use std::ptr;
+
+        extern "C" {
+            fn XOpenDisplay(name: *const c_void) -> *mut c_void;
+            fn XCloseDisplay(display: *mut c_void);
+            fn XDefaultRootWindow(display: *mut c_void) -> u64;
+            fn XQueryPointer(
+                display: *mut c_void,
+                window: u64,
+                root_return: *mut u64,
+                child_return: *mut u64,
+                root_x_return: *mut i32,
+                root_y_return: *mut i32,
+                win_x_return: *mut i32,
+                win_y_return: *mut i32,
+                mask_return: *mut u32,
+            ) -> i32;
+        }
+
+        let display = unsafe { XOpenDisplay(ptr::null()) };
+        if display.is_null() {
+            return Err("XOpenDisplay failed".into());
+        }
+        let root = unsafe { XDefaultRootWindow(display) };
+        let mut root_x = 0i32;
+        let mut root_y = 0i32;
+        unsafe {
+            XQueryPointer(
+                display,
+                root,
+                &mut 0u64,
+                &mut 0u64,
+                &mut root_x,
+                &mut root_y,
+                &mut 0i32,
+                &mut 0i32,
+                &mut 0u32,
+            );
+            XCloseDisplay(display);
+        }
+        return Ok((root_x, root_y));
+    }
+
+    #[allow(unreachable_code)]
+    Err("Linux cursor position not available without x11".into())
+}
+
+// ── Screen capture ──────────────────────────────────────────────────────────
 
 /// Capture the screen to raw RGBA bytes in memory (no file I/O).
 #[cfg(not(target_os = "macos"))]
@@ -109,13 +336,14 @@ pub fn capture_screen_to_memory(screen: CaptureScreen) -> AppResult<(Vec<u8>, u3
 }
 
 #[cfg(target_os = "macos")]
-pub fn find_primary_screen() -> AppResult<PrimaryMonitorInfo> {
-    find_primary_screen_macos()
+pub fn capture_screen_to_memory(display_id: u32) -> AppResult<(Vec<u8>, u32, u32)> {
+    let captured = capture_screen_with_preview(display_id)?;
+    Ok((captured.rgba_bytes, captured.width, captured.height))
 }
 
 #[cfg(target_os = "macos")]
-pub fn capture_screen_to_memory(screen: CaptureScreen) -> AppResult<(Vec<u8>, u32, u32)> {
-    capture_screen_to_memory_macos(screen)
+pub fn capture_screen_with_preview(display_id: u32) -> AppResult<CapturedScreenImage> {
+    capture_screen_with_preview_macos(display_id)
 }
 
 #[cfg(target_os = "macos")]
@@ -124,105 +352,20 @@ pub fn capture_interactive_region() -> AppResult<Option<InteractiveCaptureImage>
 }
 
 #[cfg(target_os = "macos")]
-pub fn capture_screen_with_preview(screen: CaptureScreen) -> AppResult<CapturedScreenImage> {
-    capture_screen_with_preview_macos(screen)
-}
-
-#[cfg(target_os = "macos")]
-fn find_primary_screen_macos() -> AppResult<PrimaryMonitorInfo> {
-    use core_graphics::display::CGDisplay;
-
-    let t0 = std::time::Instant::now();
-    let main_display = CGDisplay::main();
-    let bounds = main_display.bounds();
-    
-    let logical_w = bounds.size.width;
-    let logical_h = bounds.size.height;
-    let pixels_w = main_display.pixels_wide();
-    
-    let scale_factor = if logical_w > 0.0 {
-        (pixels_w as f64) / logical_w
-    } else {
-        1.0
-    };
-
-    let x = bounds.origin.x as i32;
-    let y = bounds.origin.y as i32;
-    let width = logical_w as u32;
-    let height = logical_h as u32;
-
-    tracing::info!("[PERF][capture] CGDisplay::main: {:?}", t0.elapsed());
-
-    debug_log(format!(
-        "[monitor] primary x={} y={} width={} height={} scale_factor={}",
-        x, y, width, height, scale_factor
-    ));
-
-    Ok(PrimaryMonitorInfo {
-        screen: MockMonitor {},
-        scale_factor,
-        x,
-        y,
-        width,
-        height,
-    })
-}
-
-#[cfg(target_os = "macos")]
-pub fn debug_reset_dir() -> AppResult<PathBuf> {
-    let dir = PathBuf::from(DEBUG_CAPTURE_DIR);
-    if dir.exists() {
-        let _ = fs::remove_dir_all(&dir);
-    }
-    fs::create_dir_all(&dir).map_err(|e| {
-        AppError::Capture(format!(
-            "failed to create debug dir {DEBUG_CAPTURE_DIR}: {e}"
-        ))
-    })?;
-    Ok(dir)
-}
-
-#[cfg(target_os = "macos")]
-pub fn debug_dir() -> PathBuf {
-    PathBuf::from(DEBUG_CAPTURE_DIR)
-}
-
-#[cfg(target_os = "macos")]
-pub fn debug_log(message: impl AsRef<str>) {
-    let dir = PathBuf::from(DEBUG_CAPTURE_DIR);
-    let _ = fs::create_dir_all(&dir);
-    let log_path = dir.join("capture.log");
-    let line = format!("{}\n", message.as_ref());
-    use std::io::Write;
-    if let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-    {
-        let _ = file.write_all(line.as_bytes());
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub fn debug_write_bytes(file_name: &str, bytes: &[u8]) {
-    let dir = PathBuf::from(DEBUG_CAPTURE_DIR);
-    let _ = fs::create_dir_all(&dir);
-    let _ = fs::write(dir.join(file_name), bytes);
-}
-
-#[cfg(target_os = "macos")]
-fn capture_screen_to_memory_macos(_screen: CaptureScreen) -> AppResult<(Vec<u8>, u32, u32)> {
-    let captured = capture_screen_with_preview_macos(_screen)?;
-    Ok((captured.rgba_bytes, captured.width, captured.height))
-}
-
-#[cfg(target_os = "macos")]
-fn capture_screen_with_preview_macos(_screen: CaptureScreen) -> AppResult<CapturedScreenImage> {
+fn capture_screen_with_preview_macos(display_id: u32) -> AppResult<CapturedScreenImage> {
     let started = std::time::Instant::now();
     let capture_path = temp_capture_path("jpg");
 
+    let display_id_str = display_id.to_string();
     let status = Command::new("screencapture")
-        .args(["-x", "-m", "-t", "jpg", capture_path.to_string_lossy().as_ref()])
+        .args([
+            "-x",
+            "-D",
+            &display_id_str,
+            "-t",
+            "jpg",
+            capture_path.to_string_lossy().as_ref(),
+        ])
         .status()
         .map_err(|e| AppError::Capture(format!("failed to run screencapture: {e}")))?;
 
@@ -355,6 +498,50 @@ fn capture_interactive_region_macos() -> AppResult<Option<InteractiveCaptureImag
         width,
         height,
     }))
+}
+
+// ── Debug helpers (macOS) ─────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+pub fn debug_reset_dir() -> AppResult<PathBuf> {
+    let dir = PathBuf::from(DEBUG_CAPTURE_DIR);
+    if dir.exists() {
+        let _ = fs::remove_dir_all(&dir);
+    }
+    fs::create_dir_all(&dir).map_err(|e| {
+        AppError::Capture(format!(
+            "failed to create debug dir {DEBUG_CAPTURE_DIR}: {e}"
+        ))
+    })?;
+    Ok(dir)
+}
+
+#[cfg(target_os = "macos")]
+pub fn debug_dir() -> PathBuf {
+    PathBuf::from(DEBUG_CAPTURE_DIR)
+}
+
+#[cfg(target_os = "macos")]
+pub fn debug_log(message: impl AsRef<str>) {
+    let dir = PathBuf::from(DEBUG_CAPTURE_DIR);
+    let _ = fs::create_dir_all(&dir);
+    let log_path = dir.join("capture.log");
+    let line = format!("{}\n", message.as_ref());
+    use std::io::Write;
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn debug_write_bytes(file_name: &str, bytes: &[u8]) {
+    let dir = PathBuf::from(DEBUG_CAPTURE_DIR);
+    let _ = fs::create_dir_all(&dir);
+    let _ = fs::write(dir.join(file_name), bytes);
 }
 
 #[cfg(target_os = "macos")]

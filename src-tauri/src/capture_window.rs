@@ -18,6 +18,8 @@ pub enum CaptureCommand {
         img_w: u32,
         img_h: u32,
         scale_factor: f64,
+        monitor_x: i32,
+        monitor_y: i32,
         event_tx: mpsc::Sender<CaptureEvent>,
     },
     /// Display a translated result image over the selection area.
@@ -96,6 +98,8 @@ pub fn start_capture(
     img_w: u32,
     img_h: u32,
     scale_factor: f64,
+    monitor_x: i32,
+    monitor_y: i32,
     event_tx: mpsc::Sender<CaptureEvent>,
 ) {
     let _ = capture_proxy().send_event(CaptureCommand::StartCapture {
@@ -103,6 +107,8 @@ pub fn start_capture(
         img_w,
         img_h,
         scale_factor,
+        monitor_x,
+        monitor_y,
         event_tx,
     });
 }
@@ -172,23 +178,32 @@ impl CaptureHandler {
         img_w: u32,
         img_h: u32,
         scale_factor: f64,
+        monitor_x: i32,
+        monitor_y: i32,
         event_tx: mpsc::Sender<CaptureEvent>,
     ) {
+        // Find the monitor handle matching the given coordinates
+        let target_monitor = event_loop.available_monitors().find(|m| {
+            let pos = m.position();
+            pos.x == monitor_x && pos.y == monitor_y
+        });
+
+        let fullscreen = match target_monitor {
+            Some(m) => Fullscreen::Borderless(Some(m)),
+            None => Fullscreen::Borderless(None),
+        };
+
         let attrs = Window::default_attributes()
             .with_title("Capture")
             .with_decorations(false)
             .with_resizable(false)
-            .with_fullscreen(Some(Fullscreen::Borderless(None)))
+            .with_fullscreen(Some(fullscreen))
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_visible(false);
 
         #[cfg(target_os = "macos")]
         let attrs = {
             use winit::platform::macos::WindowAttributesExtMacOS;
-            // On macOS, ensure the borderless fullscreen covers the menu bar.
-            // `with_fullsize_content_view` extends content under titlebar (not needed
-            // for borderless but harmless). The key is that Borderless(None) on macOS
-            // already covers the full screen including the menu bar area.
             attrs.with_fullsize_content_view(true)
         };
 
@@ -361,11 +376,13 @@ impl ApplicationHandler<CaptureCommand> for CaptureHandler {
                 img_w,
                 img_h,
                 scale_factor,
+                monitor_x,
+                monitor_y,
                 event_tx,
             } => {
                 // Always close any previous window before opening a new one.
                 self.close_window();
-                self.open_window(event_loop, rgba, img_w, img_h, scale_factor, event_tx);
+                self.open_window(event_loop, rgba, img_w, img_h, scale_factor, monitor_x, monitor_y, event_tx);
             }
 
             CaptureCommand::ShowResult {
