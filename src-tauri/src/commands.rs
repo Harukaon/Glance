@@ -386,6 +386,19 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
             rgba.len() as f64 / 1_048_576.0
         );
 
+        *state.capture_session.write().await = Some(crate::app_state::ActiveCaptureSession {
+            rgba: rgba.clone(),
+            img_w: w,
+            img_h: h,
+            scale_factor,
+            monitor_x: monitor.x,
+            monitor_y: monitor.y,
+            monitor_width: monitor.width,
+            monitor_height: monitor.height,
+            preview_image_base64: None,
+            preview_image_mime: String::new(),
+        });
+
         let (event_tx, event_rx) = mpsc::channel::<CaptureEvent>();
         capture_window::start_capture(rgba.clone(), w, h, scale_factor, monitor.x, monitor.y, event_tx);
         tracing::info!("[PERF] start_capture_native: {:?}", t0.elapsed());
@@ -578,6 +591,8 @@ async fn handle_capture_events(
                     Err(e) => {
                         tracing::error!("Translation error: {e}");
                         emit_workflow_state(&app, "翻译失败", "error", false).ok();
+                        let _ = capture_window::capture_proxy().send_event(CaptureCommand::Close);
+                        break;
                     }
                 }
             }
