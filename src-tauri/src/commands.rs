@@ -18,9 +18,11 @@ use crate::models::{
     CaptureRect, CaptureTranslatePayload, CaptureViewPayload, HistoryQuery, OverlayPayload,
     SelectionPayload, TextTranslationResult, TranslationHistoryItem, TranslatorSettings,
 };
+use crate::popup_shortcut::{decide_popup_shortcut_action, PopupShortcutAction};
 
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const CAPTURE_WINDOW_LABEL: &str = "capture";
+const FOCUS_TEXT_INPUT_EVENT: &str = "main:focus-text-input";
 const WIN_WIDTH: f64 = 520.0;
 
 // ── Settings ────────────────────────────────────────────────────────────────
@@ -113,13 +115,7 @@ pub fn apply_popup_shortcut(app: &AppHandle, shortcut: &str) {
             if event.state == ShortcutState::Pressed {
                 let app2 = app_clone.clone();
                 tauri::async_runtime::spawn(async move {
-                    #[cfg(target_os = "macos")]
-                    let _ = app2.set_dock_visibility(true);
-                    if let Some(w) = app2.get_webview_window("main") {
-                        let _ = w.unminimize();
-                        let _ = w.show();
-                        let _ = w.set_focus();
-                    }
+                    let _ = toggle_main_window_from_popup_shortcut(&app2);
                 });
             }
         })
@@ -203,6 +199,32 @@ fn instant_hide(window: &tauri::WebviewWindow) {
         }
     }
     let _ = window.hide();
+}
+
+fn toggle_main_window_from_popup_shortcut(app: &AppHandle) -> AppResult<()> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+
+    let is_visible = window.is_visible().unwrap_or(false);
+    match decide_popup_shortcut_action(is_visible) {
+        PopupShortcutAction::HideWindow => {
+            instant_hide(&window);
+            #[cfg(target_os = "macos")]
+            app.set_dock_visibility(false)?;
+        }
+        PopupShortcutAction::ShowWindowAndFocusInput => {
+            #[cfg(target_os = "macos")]
+            app.set_dock_visibility(true)?;
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+            // 显示窗口由后端负责，真正聚焦哪个输入控件交给前端决定，避免后端耦合 DOM 细节。
+            app.emit_to("main", FOCUS_TEXT_INPUT_EVENT, serde_json::json!({}))?;
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

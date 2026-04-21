@@ -1,3 +1,5 @@
+import { focusTextInputIfAllowed } from "./focus-helpers.mjs";
+
 const LANGUAGES = [
   { value: "auto", label: "自动检测" },
   { value: "zh-CHS", label: "中文简体" },
@@ -161,6 +163,13 @@ async function bindMainListeners() {
       setCapturePreparing(false);
     }
     updateOutputArea();
+  });
+  await listen("main:focus-text-input", () => {
+    focusTextInputIfAllowed({
+      mode,
+      hotkeyRecording: state.hotkeyRecording,
+      input: document.querySelector("#text-input"),
+    });
   });
   state.listenersBound = true;
 }

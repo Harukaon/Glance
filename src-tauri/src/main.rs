@@ -11,6 +11,7 @@ mod error;
 mod google_translate;
 mod llm_translate;
 mod models;
+mod popup_shortcut;
 mod self_test;
 mod translate_engine;
 
