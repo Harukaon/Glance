@@ -21,7 +21,6 @@ pub struct ActiveCaptureSession {
     pub preview_image_mime: String,
     #[cfg(target_os = "macos")]
     pub display_id: u32,
-    #[cfg(target_os = "macos")]
     pub restore_main_window: bool,
 }
 

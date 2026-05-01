@@ -201,6 +201,18 @@ fn instant_hide(window: &tauri::WebviewWindow) {
     let _ = window.hide();
 }
 
+fn hide_main_window_before_capture(app: &AppHandle) -> bool {
+    if let Some(main_window) = app.get_webview_window("main") {
+        let was_visible = main_window.is_visible().unwrap_or(false);
+        if was_visible {
+            instant_hide(&main_window);
+        }
+        was_visible
+    } else {
+        false
+    }
+}
+
 fn toggle_main_window_from_popup_shortcut(app: &AppHandle) -> AppResult<()> {
     let Some(window) = app.get_webview_window("main") else {
         return Ok(());
@@ -269,22 +281,10 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
     #[cfg(target_os = "macos")]
     capture_timeline(&t0, "begin_capture_impl entered");
 
+    let restore_main_window = hide_main_window_before_capture(app);
+
     #[cfg(target_os = "macos")]
-    let restore_main_window = if let Some(main_window) = app.get_webview_window("main") {
-        let was_visible = main_window.is_visible().unwrap_or(false);
-        capture::debug_log(format!(
-            "[begin] main window visible before capture={was_visible}"
-        ));
-        if was_visible {
-            instant_hide(&main_window);
-            capture::debug_log("[begin] hid main window instantly");
-            capture_timeline(&t0, "main window hidden");
-        }
-        was_visible
-    } else {
-        capture::debug_log("[begin] main window missing");
-        false
-    };
+    capture_timeline(&t0, "main window hidden");
 
     #[cfg(target_os = "macos")]
     {
@@ -419,6 +419,7 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
             monitor_height: monitor.height,
             preview_image_base64: None,
             preview_image_mime: String::new(),
+            restore_main_window,
         });
 
         let (event_tx, event_rx) = mpsc::channel::<CaptureEvent>();
@@ -622,13 +623,13 @@ async fn handle_capture_events(
         }
     }
 
+    restore_main_window_if_needed(&app, &state).await;
     reset_capture_state(&state).await;
     emit_workflow_state(&app, "", "", false).ok();
 }
 
 #[tauri::command]
 pub async fn cancel_capture(app: AppHandle, state: State<'_, SharedState>) -> AppResult<()> {
-    #[cfg(target_os = "macos")]
     restore_main_window_if_needed(&app, state.inner()).await;
     #[cfg(target_os = "macos")]
     capture::debug_log("[cancel] capture cancelled");
@@ -697,7 +698,6 @@ async fn reset_capture_state(state: &SharedState) {
     *state.capture_session.write().await = None;
 }
 
-#[cfg(target_os = "macos")]
 async fn restore_main_window_if_needed(app: &AppHandle, state: &SharedState) {
     let should_restore = state
         .capture_session
@@ -714,7 +714,6 @@ async fn restore_main_window_if_needed(app: &AppHandle, state: &SharedState) {
         if let Some(main_window) = app.get_webview_window("main") {
             let _ = main_window.show();
             let _ = main_window.set_focus();
-            capture::debug_log("[state] restored main window");
         }
     }
 }
