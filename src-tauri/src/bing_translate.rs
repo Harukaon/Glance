@@ -113,8 +113,9 @@ impl BingTranslateClient {
             .to_string();
 
         if translated.is_empty() {
+            *self.token.write().await = None;
             return Err(AppError::Api(
-                "Bing translate returned empty result".into(),
+                "Bing translate returned empty result, token reset".into(),
             ));
         }
 
@@ -186,7 +187,8 @@ impl BingTranslateClient {
             .to_string();
 
         if translated.is_empty() {
-            return Err(AppError::Api("Bing translate (www) returned empty result".into()));
+            *self.token.write().await = None;
+            return Err(AppError::Api("Bing translate (www) returned empty result, token reset".into()));
         }
 
         Ok(TextTranslationResult {
