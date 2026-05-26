@@ -22,9 +22,10 @@ use app_state::SharedState;
 use bing_translate::BingTranslateClient;
 use llm_translate::LlmTranslateClient;
 use commands::{
-    begin_capture, cancel_capture, capture_debug_log, clear_history, close_overlay, hide_window,
-    list_history, load_capture_payload, load_overlay_payload, load_settings, resize_main_window,
-    save_settings, show_overlay, submit_capture_selection, translate_text,
+    begin_capture, begin_copy_capture, cancel_capture, capture_debug_log, clear_history,
+    close_overlay, close_toast, hide_window, list_history, load_capture_payload,
+    load_overlay_payload, load_settings, resize_main_window, save_settings, show_overlay,
+    submit_capture_selection, translate_text,
 };
 use config::ConfigStore;
 use models::TranslatorSettings;
@@ -78,6 +79,15 @@ fn main() {
     }
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            #[cfg(target_os = "macos")]
+            let _ = app.set_dock_visibility(true);
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -103,6 +113,7 @@ fn main() {
                 if let Some(ref popup) = settings.popup_shortcut {
                     commands::apply_popup_shortcut(&app_handle, popup);
                 }
+                commands::apply_copy_hotkey(&app_handle, &settings.copy_hotkey);
 
                 // ── HTTP clients ────────────────────────────────────────────────
                 // General client for Youdao
@@ -191,12 +202,14 @@ fn main() {
             list_history,
             clear_history,
             begin_capture,
+            begin_copy_capture,
             cancel_capture,
             load_capture_payload,
             submit_capture_selection,
             show_overlay,
             load_overlay_payload,
             close_overlay,
+            close_toast,
             translate_text,
             resize_main_window,
             hide_window,
