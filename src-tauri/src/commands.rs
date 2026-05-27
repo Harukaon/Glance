@@ -15,8 +15,9 @@ use crate::capture;
 use crate::capture_window::{self, CaptureCommand, CaptureEvent};
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    CaptureRect, CaptureTranslatePayload, CaptureViewPayload, HistoryQuery, OverlayPayload,
-    SelectionPayload, TextTranslationResult, TranslationHistoryItem, TranslatorSettings,
+    CaptureMode, CaptureRect, CaptureTranslatePayload, CaptureViewPayload, HistoryQuery,
+    OcrTextResult, OverlayPayload, SelectionPayload, TextTranslationResult,
+    TranslationHistoryItem, TranslatorSettings,
 };
 use crate::popup_shortcut::{decide_popup_shortcut_action, PopupShortcutAction};
 
@@ -56,6 +57,10 @@ pub async fn save_settings(
         if let Some(ref new_shortcut) = settings.popup_shortcut {
             apply_popup_shortcut(&app, new_shortcut);
         }
+    }
+    if settings.copy_hotkey != old.copy_hotkey {
+        unregister_copy_hotkey(&app, &old.copy_hotkey);
+        apply_copy_hotkey(&app, &settings.copy_hotkey);
     }
 
     Ok(settings)
@@ -121,6 +126,37 @@ pub fn apply_popup_shortcut(app: &AppHandle, shortcut: &str) {
         })
     {
         tracing::warn!("popup shortcut register failed for '{shortcut}': {e}");
+    }
+}
+
+pub fn apply_copy_hotkey(app: &AppHandle, hotkey: &str) {
+    if hotkey.is_empty() {
+        return;
+    }
+    tracing::info!("registering copy shortcut: '{hotkey}'");
+    let app_clone = app.clone();
+    if let Err(e) = app
+        .global_shortcut()
+        .on_shortcut(hotkey, move |_app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                let app2 = app_clone.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state: State<'_, SharedState> = app2.state();
+                    let _ = crate::commands::begin_copy_capture(app2.clone(), state).await;
+                });
+            }
+        })
+    {
+        tracing::warn!("copy shortcut register failed for '{hotkey}': {e}");
+    }
+}
+
+fn unregister_copy_hotkey(app: &AppHandle, hotkey: &str) {
+    if hotkey.is_empty() {
+        return;
+    }
+    if let Err(e) = app.global_shortcut().unregister(hotkey) {
+        tracing::warn!("copy shortcut unregister failed for '{hotkey}': {e}");
     }
 }
 
@@ -264,6 +300,12 @@ pub async fn begin_capture(app: AppHandle, state: State<'_, SharedState>) -> App
         emit_workflow_state(&app, "", "", false).ok();
     }
     result
+}
+
+#[tauri::command]
+pub async fn begin_copy_capture(app: AppHandle, state: State<'_, SharedState>) -> AppResult<()> {
+    *state.capture_mode.write().await = CaptureMode::CopyText;
+    begin_capture(app, state).await
 }
 
 async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<()> {
@@ -477,63 +519,118 @@ pub async fn submit_capture_selection(
         return Err(AppError::Capture("selection too small".into()));
     }
 
-    emit_workflow_state(&app, "正在翻译…", "", true).ok();
+    let mode = *state.capture_mode.read().await;
+    if mode == CaptureMode::CopyText {
+        emit_workflow_state(&app, "正在识别文字…", "", true).ok();
 
-    let result = async {
-        let (crop, scale_factor) = {
-            let guard = state.capture_session.read().await;
-            let session = guard
-                .as_ref()
-                .ok_or_else(|| AppError::Capture("capture session missing".into()))?;
+        let result = async {
+            let (crop, scale_factor) = {
+                let guard = state.capture_session.read().await;
+                let session = guard
+                    .as_ref()
+                    .ok_or_else(|| AppError::Capture("capture session missing".into()))?;
+                (
+                    capture_window::crop_rgba(
+                        &session.rgba,
+                        session.img_w,
+                        selection.x,
+                        selection.y,
+                        selection.width,
+                        selection.height,
+                    ),
+                    session.scale_factor,
+                )
+            };
 
-            #[cfg(target_os = "macos")]
-            capture::debug_log(format!(
-                "[select] x={} y={} width={} height={} source_image={}x{} scale_factor={}",
-                selection.x,
-                selection.y,
-                selection.width,
-                selection.height,
-                session.img_w,
-                session.img_h,
-                session.scale_factor
-            ));
+            let png_bytes = encode_cropped_png(crop, selection.width, selection.height).await?;
+            let ocr_result = ocr_extract_text(state.inner(), png_bytes, &selection, scale_factor).await?;
+            Ok(ocr_result)
+        }.await;
 
-            (
-                capture_window::crop_rgba(
-                    &session.rgba,
-                    session.img_w,
+        match result {
+            Ok(ocr_result) => {
+                // Copy to clipboard
+                if let Err(e) = copy_to_clipboard(&ocr_result.text) {
+                    tracing::warn!("clipboard copy failed: {e}");
+                }
+                // Close capture window
+                 let _ = close_capture_window(&app);
+                // Show toast (works on all platforms)
+                show_toast(&app, selection.x, selection.y, &state).await.ok();
+                 // Reset state since capture is complete
+                 reset_capture_state(state.inner()).await;
+                emit_workflow_state(&app, "已复制到剪贴板", "ok", false).ok();
+                Ok(CaptureTranslatePayload {
+                    image_base64: String::new(),
+                    selection,
+                })
+            }
+            Err(err) => {
+                 #[cfg(target_os = "macos")]
+                 capture::debug_log(format!("[select] ocr error={err}"));
+                 emit_workflow_state(&app, "识别失败", "error", false).ok();
+                 Err(err)
+             }
+        }
+    } else {
+        emit_workflow_state(&app, "正在翻译…", "", true).ok();
+
+        let result = async {
+            let (crop, scale_factor) = {
+                let guard = state.capture_session.read().await;
+                let session = guard
+                    .as_ref()
+                    .ok_or_else(|| AppError::Capture("capture session missing".into()))?;
+
+                #[cfg(target_os = "macos")]
+                capture::debug_log(format!(
+                    "[select] x={} y={} width={} height={} source_image={}x{} scale_factor={}",
                     selection.x,
                     selection.y,
                     selection.width,
                     selection.height,
-                ),
-                session.scale_factor,
-            )
-        };
+                    session.img_w,
+                    session.img_h,
+                    session.scale_factor
+                ));
 
-        let png_bytes = encode_cropped_png(crop, selection.width, selection.height).await?;
-        #[cfg(target_os = "macos")]
-        capture::debug_write_bytes("03_crop.png", &png_bytes);
-        let image_base64 =
-            translate_capture_png(state.inner(), png_bytes, &selection, scale_factor).await?;
+                (
+                    capture_window::crop_rgba(
+                        &session.rgba,
+                        session.img_w,
+                        selection.x,
+                        selection.y,
+                        selection.width,
+                        selection.height,
+                    ),
+                    session.scale_factor,
+                )
+            };
 
-        Ok::<CaptureTranslatePayload, AppError>(CaptureTranslatePayload {
-            image_base64,
-            selection,
-        })
-    }
-    .await;
-
-    match result {
-        Ok(payload) => {
-            emit_workflow_state(&app, "翻译完成", "ok", false).ok();
-            Ok(payload)
-        }
-        Err(err) => {
+            let png_bytes = encode_cropped_png(crop, selection.width, selection.height).await?;
             #[cfg(target_os = "macos")]
-            capture::debug_log(format!("[select] error={err}"));
-            emit_workflow_state(&app, "翻译失败", "error", false).ok();
-            Err(err)
+            capture::debug_write_bytes("03_crop.png", &png_bytes);
+            let image_base64 =
+                translate_capture_png(state.inner(), png_bytes, &selection, scale_factor).await?;
+
+            Ok::<CaptureTranslatePayload, AppError>(CaptureTranslatePayload {
+                image_base64,
+                selection,
+            })
+        }
+        .await;
+
+        match result {
+            Ok(payload) => {
+                emit_workflow_state(&app, "翻译完成", "ok", false).ok();
+                Ok(payload)
+            }
+            Err(err) => {
+                #[cfg(target_os = "macos")]
+                capture::debug_log(format!("[select] error={err}"));
+                emit_workflow_state(&app, "翻译失败", "error", false).ok();
+                Err(err)
+            }
         }
     }
 }
@@ -559,63 +656,99 @@ async fn handle_capture_events(
 
         match event {
             CaptureEvent::Selection { x, y, w, h } => {
-                emit_workflow_state(&app, "正在翻译…", "", true).ok();
-                let _ = capture_window::capture_proxy().send_event(CaptureCommand::ShowLoading);
+                let mode = *state.capture_mode.read().await;
 
-                let crop = capture_window::crop_rgba(&rgba, img_w, x, y, w, h);
-                let rect = CaptureRect {
-                    x,
-                    y,
-                    width: w,
-                    height: h,
-                };
+                if mode == CaptureMode::CopyText {
+                    emit_workflow_state(&app, "正在识别文字…", "", true).ok();
+                    let _ = capture_window::capture_proxy().send_event(CaptureCommand::ShowLoading);
 
-                let png_bytes = match encode_cropped_png(crop, w, h).await {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        tracing::error!("PNG encode failed: {e}");
-                        emit_workflow_state(&app, "截图编码失败", "error", false).ok();
-                        continue;
-                    }
-                };
+                    let crop = capture_window::crop_rgba(&rgba, img_w, x, y, w, h);
+                    let rect = CaptureRect { x, y, width: w, height: h };
 
-                match translate_capture_png(&state, png_bytes, &rect, scale_factor).await {
-                    Ok(image_base64) => {
-                        if !image_base64.is_empty() {
-                            match BASE64_STANDARD.decode(&image_base64) {
-                                Ok(jpeg_bytes) => {
-                                    let rgba_result = tokio::task::spawn_blocking(move || {
-                                        decode_jpeg_to_rgba(&jpeg_bytes)
-                                    })
-                                    .await;
-
-                                    match rgba_result {
-                                        Ok(Ok((result_rgba, rw, rh))) => {
-                                            let _ = capture_window::capture_proxy().send_event(
-                                                CaptureCommand::ShowResult {
-                                                    rgba_bytes: result_rgba,
-                                                    x,
-                                                    y,
-                                                    w: rw,
-                                                    h: rh,
-                                                },
-                                            );
-                                        }
-                                        Ok(Err(e)) => tracing::warn!("JPEG decode: {e}"),
-                                        Err(e) => tracing::warn!("spawn_blocking JPEG: {e}"),
-                                    }
-                                }
-                                Err(e) => tracing::warn!("base64 decode: {e}"),
-                            }
+                    let png_bytes = match encode_cropped_png(crop, w, h).await {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            tracing::error!("PNG encode failed: {e}");
+                            emit_workflow_state(&app, "截图编码失败", "error", false).ok();
+                            continue;
                         }
+                    };
 
-                        emit_workflow_state(&app, "翻译完成", "ok", false).ok();
+                    match ocr_extract_text(&state, png_bytes, &rect, scale_factor).await {
+                        Ok(ocr_result) => {
+                            if let Err(e) = copy_to_clipboard(&ocr_result.text) {
+                                tracing::warn!("clipboard copy failed: {e}");
+                            }
+                            let _ = capture_window::capture_proxy().send_event(CaptureCommand::Close);
+                            show_toast(&app, x, y, &state).await.ok();
+                            emit_workflow_state(&app, "已复制到剪贴板", "ok", false).ok();
+                        }
+                        Err(e) => {
+                            tracing::error!("OCR error: {e}");
+                            emit_workflow_state(&app, "识别失败", "error", false).ok();
+                            let _ = capture_window::capture_proxy().send_event(CaptureCommand::Close);
+                            break;
+                        }
                     }
-                    Err(e) => {
-                        tracing::error!("Translation error: {e}");
-                        emit_workflow_state(&app, "翻译失败", "error", false).ok();
-                        let _ = capture_window::capture_proxy().send_event(CaptureCommand::Close);
-                        break;
+                } else {
+                    emit_workflow_state(&app, "正在翻译…", "", true).ok();
+                    let _ = capture_window::capture_proxy().send_event(CaptureCommand::ShowLoading);
+
+                    let crop = capture_window::crop_rgba(&rgba, img_w, x, y, w, h);
+                    let rect = CaptureRect {
+                        x,
+                        y,
+                        width: w,
+                        height: h,
+                    };
+
+                    let png_bytes = match encode_cropped_png(crop, w, h).await {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            tracing::error!("PNG encode failed: {e}");
+                            emit_workflow_state(&app, "截图编码失败", "error", false).ok();
+                            continue;
+                        }
+                    };
+
+                    match translate_capture_png(&state, png_bytes, &rect, scale_factor).await {
+                        Ok(image_base64) => {
+                            if !image_base64.is_empty() {
+                                match BASE64_STANDARD.decode(&image_base64) {
+                                    Ok(jpeg_bytes) => {
+                                        let rgba_result = tokio::task::spawn_blocking(move || {
+                                            decode_jpeg_to_rgba(&jpeg_bytes)
+                                        })
+                                        .await;
+
+                                        match rgba_result {
+                                            Ok(Ok((result_rgba, rw, rh))) => {
+                                                let _ = capture_window::capture_proxy().send_event(
+                                                    CaptureCommand::ShowResult {
+                                                        rgba_bytes: result_rgba,
+                                                        x,
+                                                        y,
+                                                        w: rw,
+                                                        h: rh,
+                                                    },
+                                                );
+                                            }
+                                            Ok(Err(e)) => tracing::warn!("JPEG decode: {e}"),
+                                            Err(e) => tracing::warn!("spawn_blocking JPEG: {e}"),
+                                        }
+                                    }
+                                    Err(e) => tracing::warn!("base64 decode: {e}"),
+                                }
+                            }
+
+                            emit_workflow_state(&app, "翻译完成", "ok", false).ok();
+                        }
+                        Err(e) => {
+                            tracing::error!("Translation error: {e}");
+                            emit_workflow_state(&app, "翻译失败", "error", false).ok();
+                            let _ = capture_window::capture_proxy().send_event(CaptureCommand::Close);
+                            break;
+                        }
                     }
                 }
             }
@@ -696,6 +829,7 @@ async fn reset_capture_state(state: &SharedState) {
     capture::debug_log("[state] reset capture state");
     *state.capture_in_progress.write().await = false;
     *state.capture_session.write().await = None;
+    *state.capture_mode.write().await = CaptureMode::default();
 }
 
 async fn restore_main_window_if_needed(app: &AppHandle, state: &SharedState) {
@@ -823,6 +957,114 @@ async fn translate_capture_png(
     }
 
     Ok(response.rendered_image_base64)
+}
+
+async fn ocr_extract_text(
+    state: &SharedState,
+    png_bytes: Vec<u8>,
+    rect: &CaptureRect,
+    scale_factor: f64,
+) -> AppResult<OcrTextResult> {
+    let (settings, monitor_x, monitor_y, monitor_width, monitor_height) = {
+        let guard = state.capture_session.read().await;
+        let session = guard
+            .as_ref()
+            .ok_or_else(|| AppError::Capture("capture session missing".into()))?;
+        (
+            state.settings.read().await.clone(),
+            session.monitor_x,
+            session.monitor_y,
+            session.monitor_width,
+            session.monitor_height,
+        )
+    };
+    let response = state
+        .api_client
+        .translate_image_bytes(
+            png_bytes,
+            "capture.png".into(),
+            "image/png".into(),
+            settings.from_lang.clone(),
+            settings.to_lang.clone(),
+            SelectionPayload {
+                x: 0.0,
+                y: 0.0,
+                width: rect.width as f64,
+                height: rect.height as f64,
+                monitor_id: format!(
+                    "capture:{}:{}:{}:{}",
+                    rect.x, rect.y, rect.width, rect.height
+                ),
+                monitor_x,
+                monitor_y,
+                monitor_width,
+                monitor_height,
+                monitor_scale_factor: scale_factor,
+            },
+            None,
+            &settings,
+        )
+        .await?;
+
+    let text = response
+        .regions
+        .iter()
+        .map(|r| r.source.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(OcrTextResult {
+        text,
+        request_id: response.request_id,
+        lan_from: response.lan_from,
+    })
+}
+
+fn copy_to_clipboard(text: &str) -> AppResult<()> {
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| AppError::Capture(format!("clipboard init failed: {e}")))?;
+    clipboard
+        .set_text(text.to_owned())
+        .map_err(|e| AppError::Capture(format!("clipboard set_text failed: {e}")))?;
+    Ok(())
+}
+
+async fn show_toast(app: &AppHandle, x: u32, y: u32, state: &SharedState) -> AppResult<()> {
+    let label = "toast";
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.close();
+    }
+
+    let session = state.capture_session.read().await;
+    let Some(ref session) = *session else {
+        return Ok(());
+    };
+
+    let screen_x = session.monitor_x + x as i32;
+    let screen_y = session.monitor_y + y as i32;
+
+    let url = WebviewUrl::App("toast.html".into());
+    let _window = WebviewWindowBuilder::new(app, label, url)
+        .title("")
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .resizable(false)
+        .focused(false)
+        .visible(true)
+        .inner_size(200.0, 44.0)
+        .position(screen_x as f64, screen_y as f64)
+        .build()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn close_toast(app: AppHandle) -> AppResult<()> {
+    if let Some(w) = app.get_webview_window("toast") {
+        w.close()?;
+    }
+    Ok(())
 }
 
 fn emit_workflow_state(app: &AppHandle, message: &str, kind: &str, busy: bool) -> AppResult<()> {

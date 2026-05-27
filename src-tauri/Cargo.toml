@@ -8,6 +8,7 @@ description = "Quick screen capture & translation"
 tauri-build = { version = "2.0.1", features = [] }
 
 [dependencies]
+arboard = "3"
 base64 = "0.22.1"
 chrono = { version = "0.4.40", features = ["serde"] }
 image = { version = "0.25.5", default-features = false, features = ["png", "jpeg", "bmp"] }
@@ -21,6 +22,7 @@ serde_json = "1.0.138"
 tauri = { version = "2.1.1", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
 thiserror = "2.0.11"
 tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1.41"

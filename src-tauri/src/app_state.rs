@@ -4,7 +4,7 @@ use tokio::sync::RwLock;
 
 use crate::api::YoudaoClient;
 use crate::config::ConfigStore;
-use crate::models::{OverlayPayload, TranslatorSettings};
+use crate::models::{CaptureMode, OverlayPayload, TranslatorSettings};
 use crate::translate_engine::TextTranslator;
 
 #[derive(Clone)]
@@ -32,6 +32,7 @@ pub struct SharedState {
     pub text_translator: Arc<TextTranslator>,
     pub capture_in_progress: Arc<RwLock<bool>>,
     pub capture_session: Arc<RwLock<Option<ActiveCaptureSession>>>,
+    pub capture_mode: Arc<RwLock<CaptureMode>>,
     pub overlay_payload: Arc<RwLock<Option<OverlayPayload>>>,
 }
 
@@ -49,6 +50,7 @@ impl SharedState {
             text_translator: Arc::new(text_translator),
             capture_in_progress: Arc::new(RwLock::new(false)),
             capture_session: Arc::new(RwLock::new(None)),
+            capture_mode: Arc::new(RwLock::new(CaptureMode::default())),
             overlay_payload: Arc::new(RwLock::new(None)),
         }
     }

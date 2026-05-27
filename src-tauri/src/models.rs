@@ -69,6 +69,8 @@ pub struct TranslatorSettings {
     pub autostart: bool,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    #[serde(default = "default_copy_hotkey")]
+    pub copy_hotkey: String,
     #[serde(default)]
     pub text_translate_engine: TextTranslateEngine,
     #[serde(default)]
@@ -113,6 +115,7 @@ impl Default for TranslatorSettings {
             close_on_outside_click: true,
             autostart: false,
             hotkey: default_hotkey(),
+            copy_hotkey: default_copy_hotkey(),
             text_translate_engine: TextTranslateEngine::default(),
             llm_config: LlmConfig::default(),
             popup_shortcut: None,
@@ -148,6 +151,10 @@ fn default_monitor_scale_factor() -> f64 {
 
 fn default_hotkey() -> String {
     "CommandOrControl+Shift+X".to_string()
+}
+
+fn default_copy_hotkey() -> String {
+    "CommandOrControl+Shift+C".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,6 +254,21 @@ pub struct CaptureViewPayload {
     pub image_mime: String,
     pub image_width: u32,
     pub image_height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptureMode {
+    #[default]
+    Translate,
+    CopyText,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrTextResult {
+    pub text: String,
+    pub request_id: String,
+    pub lan_from: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

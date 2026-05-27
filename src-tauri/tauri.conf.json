@@ -4,7 +4,7 @@
   "version": "0.2.27",
   "identifier": "com.harukaon.glance",
   "build": {
-    "beforeDevCommand": "python3 -m http.server 1420 --directory ./ui",
+    "beforeDevCommand": "python dev_server.py",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../ui"
   },

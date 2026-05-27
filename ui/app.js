@@ -80,6 +80,7 @@ function defaultSettings() {
     closeOnOutsideClick: true,
     autostart: false,
     hotkey: "CommandOrControl+Shift+X",
+    copyHotkey: "CommandOrControl+Shift+C",
     textTranslateEngine: "bing",
     llmConfig: {
       baseUrl: "https://api.openai.com/v1/chat/completions",
@@ -238,6 +239,12 @@ function renderMain() {
             </div>
           </div>
           <div class="settings-row">
+            <span class="settings-label">截图复制</span>
+            <div class="shortcut-row settings-shortcut" id="copy-shortcut-row">
+              快捷键: ${state.settings.copyHotkey ? shortcutKeysHtml(state.settings.copyHotkey) : "未设置"} <span class="shortcut-hint">点击可设置</span>
+            </div>
+          </div>
+          <div class="settings-row">
             <span class="settings-label">弹出窗口</span>
             <div class="shortcut-row settings-shortcut" id="popup-shortcut-row">
               ${state.settings.popupShortcut ? shortcutKeysHtml(state.settings.popupShortcut) : "未设置"} <span class="shortcut-hint">点击可设置</span>
@@ -310,6 +317,7 @@ function renderMain() {
 
   document.querySelector("#capture-btn").addEventListener("click", e => { e.stopPropagation(); startCapture(); });
   document.querySelector("#shortcut-row").addEventListener("click", e => { e.stopPropagation(); startHotkeyRecording(); });
+  document.querySelector("#copy-shortcut-row").addEventListener("click", e => { e.stopPropagation(); startCopyHotkeyRecording(); });
   document.querySelector("#popup-shortcut-row").addEventListener("click", e => { e.stopPropagation(); startPopupShortcutRecording(); });
 
   // Engine switcher
@@ -488,7 +496,7 @@ function startHotkeyRecording() {
     e.preventDefault();
     e.stopPropagation();
     const mods = [];
-    if (e.ctrlKey) mods.push("Ctrl");
+    if (e.ctrlKey) mods.push("CommandOrControl");
     if (e.altKey) mods.push("Alt");
     if (e.shiftKey) mods.push("Shift");
     if (e.metaKey) mods.push("Super");
@@ -518,6 +526,48 @@ function startHotkeyRecording() {
   document.addEventListener("keydown", onKey, true);
 }
 
+function startCopyHotkeyRecording() {
+  if (state.hotkeyRecording) return;
+  state.hotkeyRecording = true;
+  const row = document.querySelector("#copy-shortcut-row");
+  if (!row) return;
+  row.classList.add("recording");
+  row.innerHTML = `按下快捷键…`;
+
+  function onKey(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const mods = [];
+    if (e.ctrlKey) mods.push("CommandOrControl");
+    if (e.altKey) mods.push("Alt");
+    if (e.shiftKey) mods.push("Shift");
+    if (e.metaKey) mods.push("Super");
+    if (["Control","Alt","Shift","Meta"].includes(e.key)) return;
+    if (e.key === "Escape") { finishRecording(null); return; }
+    let key = KEY_MAP[e.key] || (e.key.length === 1 ? e.key.toUpperCase() : null);
+    if (!key) {
+      return;
+    }
+    finishRecording([...mods, key].join("+"));
+  }
+
+  function finishRecording(combo) {
+    document.removeEventListener("keydown", onKey, true);
+    state.hotkeyRecording = false;
+    if (combo) {
+      state.settings.copyHotkey = combo;
+      saveSettings().catch(() => {});
+    }
+    const r = document.querySelector("#copy-shortcut-row");
+    if (r) {
+      r.classList.remove("recording");
+      r.innerHTML = `快捷键: ${shortcutKeysHtml(state.settings.copyHotkey)} <span class="shortcut-hint">点击可设置</span>`;
+    }
+  }
+
+  document.addEventListener("keydown", onKey, true);
+}
+
 function startPopupShortcutRecording() {
   if (state.hotkeyRecording) return;
   state.hotkeyRecording = true;
@@ -530,7 +580,7 @@ function startPopupShortcutRecording() {
     e.preventDefault();
     e.stopPropagation();
     const mods = [];
-    if (e.ctrlKey) mods.push("Ctrl");
+    if (e.ctrlKey) mods.push("CommandOrControl");
     if (e.altKey) mods.push("Alt");
     if (e.shiftKey) mods.push("Shift");
     if (e.metaKey) mods.push("Super");
