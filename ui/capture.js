@@ -14,6 +14,7 @@ const state = {
   copyTextMode: false,
   previewReady: false,
   resultImageBase64: "",
+  showResult: true,
   error: ""
 };
 
@@ -163,10 +164,15 @@ function updateSelectionLayer() {
 
   spinnerEl.hidden = !state.loading;
   if (state.resultImageBase64) {
-    resultEl.src = `data:image/jpeg;base64,${state.resultImageBase64}`;
-    resultEl.hidden = false;
-    previewEl.hidden = true;
-    hintEl.textContent = "Esc/右键关闭截图模式，或重新拖拽选择新区域";
+    if (state.showResult) {
+      resultEl.src = `data:image/jpeg;base64,${state.resultImageBase64}`;
+      resultEl.hidden = false;
+      previewEl.hidden = true;
+    } else {
+      resultEl.hidden = true;
+      previewEl.hidden = false;
+    }
+    hintEl.textContent = "区域内右键切换原文/译文 · Esc或区域外右键关闭";
   } else {
     resultEl.hidden = true;
     previewEl.hidden = false;
@@ -190,6 +196,13 @@ function pointFromEvent(event) {
   };
 }
 
+function pointerWithinSelection(event) {
+  if (!state.selectionCss) return false;
+  const p = pointFromEvent(event);
+  const r = state.selectionCss;
+  return p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height;
+}
+
 async function submitSelection(rectCss) {
   const rect = cssRectToImageRect(rectCss);
   if (rect.width <= 4 || rect.height <= 4) {
@@ -211,6 +224,7 @@ async function submitSelection(rectCss) {
     state.selectionImage = result.selection;
     state.selectionCss = imageRectToCssRect(result.selection);
     state.resultImageBase64 = result.imageBase64;
+    state.showResult = true;
   } catch (err) {
     setError(err);
   } finally {
@@ -225,6 +239,14 @@ function bindCaptureEvents() {
 
   root.addEventListener("contextmenu", (event) => {
     event.preventDefault();
+    // When a translation result is shown and the right-click lands inside the
+    // selected region, toggle between translation and original text instead of
+    // cancelling. Right-click outside the region (or with no result) cancels.
+    if (state.resultImageBase64 && pointerWithinSelection(event)) {
+      state.showResult = !state.showResult;
+      updateSelectionLayer();
+      return;
+    }
     cancelCapture();
   });
 
@@ -249,6 +271,11 @@ function bindCaptureEvents() {
 
   root.addEventListener("mouseup", async (event) => {
     if (event.button === 2) {
+      // Right-click is handled by the contextmenu listener (toggle inside the
+      // result region, cancel otherwise); avoid cancelling here as well.
+      if (state.resultImageBase64 && pointerWithinSelection(event)) {
+        return;
+      }
       await cancelCapture();
       return;
     }
