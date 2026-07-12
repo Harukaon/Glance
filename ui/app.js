@@ -44,12 +44,27 @@ function settingsHeight() {
 }
 
 let debounceTimer = null;
+// Monotonic id for translation requests. Each new request supersedes older
+// in-flight ones so their (stale) results are discarded, letting the user edit
+// and re-translate at any time — even mid-translation.
+let translateSeq = 0;
 
 function debouncedTranslate() {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     const text = state.inputText.trim();
-    if (text && !state.textLoading) translateText();
+    if (text) {
+      translateText();
+    } else {
+      // Input cleared: cancel any in-flight result and reset the output.
+      translateSeq++;
+      state.textLoading = false;
+      state.translatedText = "";
+      state.alternatives = [];
+      state.detectedLang = "";
+      updateOutputArea();
+      updateDetectedLang();
+    }
   }, 500);
 }
 
@@ -465,7 +480,10 @@ async function startCapture() {
 
 async function translateText() {
   const text = state.inputText.trim();
-  if (!text || state.textLoading) return;
+  if (!text) return;
+
+  // Claim this as the latest request; older in-flight ones become stale.
+  const seq = ++translateSeq;
 
   state.textLoading = true;
   state.translatedText = "";
@@ -475,25 +493,32 @@ async function translateText() {
 
   // Validate LLM config
   if (state.settings.textTranslateEngine === "llm" && !state.settings.llmConfig.apiKey) {
-    state.textLoading = false;
-    state.status = "请先在设置中配置 API Key";
-    state.statusType = "error";
-    updateOutputArea();
+    if (seq === translateSeq) {
+      state.textLoading = false;
+      state.status = "请先在设置中配置 API Key";
+      state.statusType = "error";
+      updateOutputArea();
+    }
     return;
   }
 
   try {
     const r = await invoke("translate_text", { text, fromLang: state.settings.fromLang, toLang: state.settings.toLang });
+    if (seq !== translateSeq) return; // superseded by a newer request
     state.translatedText = r.translatedText;
     state.alternatives = r.alternatives || [];
     state.detectedLang = r.fromLangDetected;
     updateDetectedLang();
   } catch (err) {
+    if (seq !== translateSeq) return; // superseded; ignore stale error
     state.status = String(err);
     state.statusType = "error";
   } finally {
-    state.textLoading = false;
-    updateOutputArea();
+    // Only the latest request controls the loading state / final render.
+    if (seq === translateSeq) {
+      state.textLoading = false;
+      updateOutputArea();
+    }
   }
 }
 
