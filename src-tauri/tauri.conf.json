@@ -26,6 +26,7 @@
         "minHeight": 400,
         "decorations": true,
         "shadow": true,
+        "backgroundColor": "#F3F4F6",
         "visible": false
       }
     ]
