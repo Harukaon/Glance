@@ -420,10 +420,17 @@ body.capture-preparing *::after {
   padding: 4px 8px;
   font-size: 12px;
   color: var(--text-main);
-  width: 180px;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 12px;
   text-align: right;
   outline: none;
   transition: border-color 0.15s;
+}
+/* Keep labels from being squeezed so the input can grow to fill the row. */
+.settings-row > .settings-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .settings-input:focus {
   border-color: var(--accent);
@@ -451,6 +458,7 @@ body.capture-preparing *::after {
 }
 .settings-textarea {
   width: 100%;
+  margin-left: 0;
   text-align: left;
   resize: vertical;
   min-height: 64px;
