@@ -14,6 +14,7 @@ mod llm_translate;
 mod models;
 mod popup_shortcut;
 mod self_test;
+mod startup;
 mod translate_engine;
 
 use std::path::PathBuf;
@@ -81,20 +82,16 @@ fn main() {
     }
 
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            #[cfg(target_os = "macos")]
-            let _ = app.set_dock_visibility(true);
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !startup::is_silent_launch(args) {
+                show_main_window(app);
             }
         }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             // Launch silently on boot: the autostart entry runs the app with this
             // flag so the main window stays hidden (tray only) on OS startup.
-            Some(vec!["--minimized"]),
+            Some(vec![startup::SILENT_START_ARG]),
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
@@ -196,16 +193,10 @@ fn main() {
             // `--minimized`, so keep the main window hidden (tray only). The window
             // is created hidden (see tauri.conf.json), so a normal launch must
             // explicitly show it here.
-            let silent_start = std::env::args().any(|arg| arg == "--minimized");
-            if silent_start {
-                let _ = main_window.hide();
-                #[cfg(target_os = "macos")]
-                let _ = app.set_dock_visibility(false);
+            if startup::is_silent_launch(std::env::args_os()) {
+                hide_main_window_to_background(app.handle());
             } else {
-                #[cfg(target_os = "macos")]
-                let _ = app.set_dock_visibility(true);
-                let _ = main_window.show();
-                let _ = main_window.set_focus();
+                show_main_window(app.handle());
             }
 
             let mw = main_window.clone();
