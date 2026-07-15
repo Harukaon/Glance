@@ -56,7 +56,7 @@ jobs:
           find src-tauri/target/${{ matrix.target }}/release/bundle/macos -name "*.app" -exec codesign --force --deep --sign - {} \;
           # Create a ZIP as a more reliable alternative for unsigned apps
           cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
-          zip -r ../../../../../glance-${{ matrix.label }}.zip Glance.app
+          zip -r "$GITHUB_WORKSPACE/glance-${{ matrix.label }}.zip" Glance.app
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
