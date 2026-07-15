@@ -191,13 +191,31 @@ pub async fn translate_text(
     from_lang: String,
     to_lang: String,
 ) -> AppResult<TextTranslationResult> {
-    let (engine, llm_config) = {
+    let (engine, llm_config, proxy_url) = {
         let settings = state.settings.read().await;
-        (settings.text_translate_engine, settings.llm_config.clone())
+        let proxy_url = match settings.proxy_mode {
+            crate::models::ProxyMode::None => None,
+            crate::models::ProxyMode::System => crate::builtin_translate::system_proxy_url(),
+            crate::models::ProxyMode::Custom => {
+                crate::builtin_translate::normalize_proxy(&settings.custom_proxy)
+            }
+        };
+        (
+            settings.text_translate_engine,
+            settings.llm_config.clone(),
+            proxy_url,
+        )
     };
     state
         .text_translator
-        .translate(&text, &from_lang, &to_lang, engine, &llm_config)
+        .translate(
+            &text,
+            &from_lang,
+            &to_lang,
+            engine,
+            &llm_config,
+            proxy_url.as_deref(),
+        )
         .await
 }
 
@@ -207,7 +225,16 @@ pub async fn translate_text(
 pub async fn resize_main_window(app: AppHandle, height: f64) -> AppResult<()> {
     if let Some(w) = app.get_webview_window("main") {
         use tauri::LogicalSize;
-        let _ = w.set_size(LogicalSize::new(WIN_WIDTH, height));
+        // Preserve the user's current (possibly manually-resized) width and only
+        // adjust the height for the settings panel. Fall back to WIN_WIDTH if the
+        // current size can't be read.
+        let width = w
+            .inner_size()
+            .ok()
+            .and_then(|physical| w.scale_factor().ok().map(|s| physical.width as f64 / s))
+            .filter(|w| *w > 0.0)
+            .unwrap_or(WIN_WIDTH);
+        let _ = w.set_size(LogicalSize::new(width, height));
     }
     Ok(())
 }

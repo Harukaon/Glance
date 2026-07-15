@@ -22,16 +22,92 @@ const TTS_LANG_MAP = {
 
 const TRANSLATE_ENGINES = [
   { value: "bing", label: "必应" },
+  { value: "google", label: "Google" },
+  { value: "microsoft", label: "微软" },
+  { value: "transmart", label: "腾讯" },
+  { value: "yandex", label: "Yandex" },
+  { value: "iciba", label: "词霸" },
   { value: "llm", label: "AI 大模型" }
 ];
 
+const PROXY_MODES = [
+  { value: "system", label: "系统代理" },
+  { value: "custom", label: "自定义" },
+  { value: "none", label: "不使用" }
+];
+
+// Measure the height the window needs to fit the whole app content (header +
+// translation area + settings panel) without leaving blank space.
+//
+// IMPORTANT: the settings panel uses `flex: 1 1 auto`, so once the window has
+// been enlarged the panel is stretched to fill the remaining space and its
+// `offsetHeight`/`scrollHeight` no longer reflect the content's natural height.
+// Reading those would make the window grow a little on every engine switch.
+// Instead we measure the panel's *content* (its `.settings-section` children),
+// which is unaffected by how tall the panel is stretched.
+function settingsHeight() {
+  const appEl = document.querySelector(".bento-app");
+  const header = document.querySelector(".header-block");
+  const textBlock = document.querySelector(".text-block");
+  const panel = document.querySelector("#settings-panel");
+  if (appEl && header && textBlock && panel) {
+    const appCs = getComputedStyle(appEl);
+    const appPadding = parseFloat(appCs.paddingTop) + parseFloat(appCs.paddingBottom);
+    const appGap = parseFloat(appCs.rowGap || appCs.gap) || 0;
+
+    // Natural content height of the settings panel = its own vertical padding
+    // plus the height of every visible section inside it.
+    const panelCs = getComputedStyle(panel);
+    let panelContent = parseFloat(panelCs.paddingTop) + parseFloat(panelCs.paddingBottom);
+    panel.querySelectorAll(":scope > .settings-section").forEach(section => {
+      if (getComputedStyle(section).display === "none") return;
+      const sCs = getComputedStyle(section);
+      panelContent +=
+        section.offsetHeight +
+        parseFloat(sCs.marginTop) +
+        parseFloat(sCs.marginBottom);
+    });
+
+    // header + text-block + panel content, with two gaps between the three
+    // top-level blocks, plus the app container padding.
+    const total =
+      header.offsetHeight +
+      textBlock.offsetHeight +
+      panelContent +
+      appGap * 2 +
+      appPadding;
+    const measured = Math.ceil(total) + 2;
+    if (measured > 0) return measured;
+  }
+  // Fallback estimate.
+  let h = 560;
+  if (state.settings?.textTranslateEngine === "llm") h += 200;
+  if (state.settings?.proxyMode === "custom") h += 56;
+  return h;
+}
+
 let debounceTimer = null;
+// Monotonic id for translation requests. Each new request supersedes older
+// in-flight ones so their (stale) results are discarded, letting the user edit
+// and re-translate at any time — even mid-translation.
+let translateSeq = 0;
 
 function debouncedTranslate() {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     const text = state.inputText.trim();
-    if (text && !state.textLoading) translateText();
+    if (text) {
+      translateText();
+    } else {
+      // Input cleared: cancel any in-flight result and reset the output.
+      translateSeq++;
+      state.textLoading = false;
+      state.translatedText = "";
+      state.alternatives = [];
+      state.detectedLang = "";
+      updateOutputArea();
+      updateDetectedLang();
+    }
   }, 500);
 }
 
@@ -85,9 +161,13 @@ function defaultSettings() {
     llmConfig: {
       baseUrl: "https://api.openai.com/v1/chat/completions",
       apiKey: "",
-      model: "gpt-4o-mini"
+      model: "gpt-4o-mini",
+      prompt: "You are a professional translator. Translate the following text from {from} to {to}. Only output the translation, nothing else. Do not add explanations or notes.",
+      autoPrompt: "You are a professional translator. Detect the source language and translate the following text to {to}. Only output the translation, nothing else. Do not add explanations or notes."
     },
-    popupShortcut: null
+    popupShortcut: null,
+    proxyMode: "system",
+    customProxy: ""
   };
 }
 
@@ -184,7 +264,7 @@ function renderMain() {
   }
 
   app.innerHTML = `
-    <div class="bento-app">
+    <div class="bento-app${state.settingsOpen ? " settings-open" : ""}">
       <div class="block header-block" data-tauri-drag-region>
         <div class="header-left">
           <div class="app-title">Glance</div>
@@ -229,6 +309,20 @@ function renderMain() {
             </div>
           </div>
           <div class="settings-row">
+            <span class="settings-label">网络代理</span>
+            <div class="engine-switcher" id="proxy-switcher">
+              ${PROXY_MODES.map(p =>
+                `<button class="engine-btn ${state.settings.proxyMode === p.value ? "active" : ""}" data-proxy="${p.value}">${p.label}</button>`
+              ).join("")}
+            </div>
+          </div>
+          <div class="settings-row" id="custom-proxy-row" style="${state.settings.proxyMode === "custom" ? "" : "display:none"}">
+            <span class="settings-label">代理地址</span>
+            <input class="settings-input" id="custom-proxy" type="text"
+                    value="${escapeHtml(state.settings.customProxy || "")}"
+                    placeholder="http://127.0.0.1:7890" />
+          </div>
+          <div class="settings-row">
             <span class="settings-label">开机自启</span>
             <button class="toggle ${state.settings.autostart ? "on" : ""}" id="autostart" aria-pressed="${state.settings.autostart}"></button>
           </div>
@@ -270,6 +364,20 @@ function renderMain() {
                     value="${escapeHtml(state.settings.llmConfig.model)}"
                     placeholder="gpt-4o-mini" />
           </div>
+          <div class="settings-row settings-row-vertical">
+            <span class="settings-label">提示词（指定源语言）
+              <span class="settings-hint">可用 {from} / {to} 表示源/目标语言</span>
+            </span>
+            <textarea class="settings-input settings-textarea" id="llm-prompt" rows="4"
+                    placeholder="${escapeHtml(defaultSettings().llmConfig.prompt)}">${escapeHtml(state.settings.llmConfig.prompt || "")}</textarea>
+          </div>
+          <div class="settings-row settings-row-vertical">
+            <span class="settings-label">提示词（自动检测源语言）
+              <span class="settings-hint">源语言为“自动检测”时使用，可用 {to}</span>
+            </span>
+            <textarea class="settings-input settings-textarea" id="llm-auto-prompt" rows="4"
+                    placeholder="${escapeHtml(defaultSettings().llmConfig.autoPrompt)}">${escapeHtml(state.settings.llmConfig.autoPrompt || "")}</textarea>
+          </div>
         </div>
       </div>
     </div>`;
@@ -298,10 +406,10 @@ function renderMain() {
     const panel = document.querySelector("#settings-panel");
     const btn = e.currentTarget;
     panel.style.display = state.settingsOpen ? "" : "none";
+    document.querySelector(".bento-app")?.classList.toggle("settings-open", state.settingsOpen);
     btn.classList.toggle("open", state.settingsOpen);
     if (state.settingsOpen) {
-      const h = state.settings.textTranslateEngine === "llm" ? 620 : 520;
-      invoke?.("resize_main_window", { height: h }).catch(() => {});
+      invoke?.("resize_main_window", { height: settingsHeight() }).catch(() => {});
     } else {
       invoke?.("resize_main_window", { height: 400 }).catch(() => {});
     }
@@ -321,30 +429,54 @@ function renderMain() {
   document.querySelector("#popup-shortcut-row").addEventListener("click", e => { e.stopPropagation(); startPopupShortcutRecording(); });
 
   // Engine switcher
-  document.querySelectorAll(".engine-btn").forEach(btn => {
+  document.querySelectorAll("#engine-switcher .engine-btn").forEach(btn => {
     btn.addEventListener("click", e => {
       e.stopPropagation();
       const newEngine = e.currentTarget.dataset.engine;
       state.settings.textTranslateEngine = newEngine;
       saveSettings().catch(() => {});
       // Update active state
-      document.querySelectorAll(".engine-btn").forEach(b => b.classList.toggle("active", b.dataset.engine === newEngine));
+      document.querySelectorAll("#engine-switcher .engine-btn").forEach(b => b.classList.toggle("active", b.dataset.engine === newEngine));
       // Toggle LLM settings visibility
       const llmSettings = document.querySelector("#llm-settings");
       if (llmSettings) llmSettings.style.display = newEngine === "llm" ? "" : "none";
-      // Resize window
-      const h = newEngine === "llm" ? 620 : 520;
-      invoke?.("resize_main_window", { height: h }).catch(() => {});
+      // Resize window only while the settings panel is open; otherwise keep the
+      // compact translation view unchanged.
+      if (state.settingsOpen) {
+        invoke?.("resize_main_window", { height: settingsHeight() }).catch(() => {});
+      }
     });
   });
+
+  // Proxy mode switcher
+  document.querySelectorAll("#proxy-switcher .engine-btn").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const newMode = e.currentTarget.dataset.proxy;
+      state.settings.proxyMode = newMode;
+      saveSettings().catch(() => {});
+      document.querySelectorAll("#proxy-switcher .engine-btn").forEach(b => b.classList.toggle("active", b.dataset.proxy === newMode));
+      const customRow = document.querySelector("#custom-proxy-row");
+      if (customRow) customRow.style.display = newMode === "custom" ? "" : "none";
+      if (state.settingsOpen) {
+        invoke?.("resize_main_window", { height: settingsHeight() }).catch(() => {});
+      }
+    });
+  });
+  const customProxyInput = document.querySelector("#custom-proxy");
+  if (customProxyInput) customProxyInput.addEventListener("change", e => { state.settings.customProxy = e.target.value.trim(); saveSettings().catch(() => {}); });
 
   // LLM config inputs
   const baseUrlInput = document.querySelector("#llm-base-url");
   const apiKeyInput = document.querySelector("#llm-api-key");
   const modelInput = document.querySelector("#llm-model");
+  const promptInput = document.querySelector("#llm-prompt");
+  const autoPromptInput = document.querySelector("#llm-auto-prompt");
   if (baseUrlInput) baseUrlInput.addEventListener("change", e => { state.settings.llmConfig.baseUrl = e.target.value.trim(); saveSettings().catch(() => {}); });
   if (apiKeyInput) apiKeyInput.addEventListener("change", e => { state.settings.llmConfig.apiKey = e.target.value.trim(); saveSettings().catch(() => {}); });
   if (modelInput) modelInput.addEventListener("change", e => { state.settings.llmConfig.model = e.target.value.trim(); saveSettings().catch(() => {}); });
+  if (promptInput) promptInput.addEventListener("change", e => { state.settings.llmConfig.prompt = e.target.value; saveSettings().catch(() => {}); });
+  if (autoPromptInput) autoPromptInput.addEventListener("change", e => { state.settings.llmConfig.autoPrompt = e.target.value; saveSettings().catch(() => {}); });
 
   inp.focus();
 }
@@ -417,7 +549,10 @@ async function startCapture() {
 
 async function translateText() {
   const text = state.inputText.trim();
-  if (!text || state.textLoading) return;
+  if (!text) return;
+
+  // Claim this as the latest request; older in-flight ones become stale.
+  const seq = ++translateSeq;
 
   state.textLoading = true;
   state.translatedText = "";
@@ -427,25 +562,32 @@ async function translateText() {
 
   // Validate LLM config
   if (state.settings.textTranslateEngine === "llm" && !state.settings.llmConfig.apiKey) {
-    state.textLoading = false;
-    state.status = "请先在设置中配置 API Key";
-    state.statusType = "error";
-    updateOutputArea();
+    if (seq === translateSeq) {
+      state.textLoading = false;
+      state.status = "请先在设置中配置 API Key";
+      state.statusType = "error";
+      updateOutputArea();
+    }
     return;
   }
 
   try {
     const r = await invoke("translate_text", { text, fromLang: state.settings.fromLang, toLang: state.settings.toLang });
+    if (seq !== translateSeq) return; // superseded by a newer request
     state.translatedText = r.translatedText;
     state.alternatives = r.alternatives || [];
     state.detectedLang = r.fromLangDetected;
     updateDetectedLang();
   } catch (err) {
+    if (seq !== translateSeq) return; // superseded; ignore stale error
     state.status = String(err);
     state.statusType = "error";
   } finally {
-    state.textLoading = false;
-    updateOutputArea();
+    // Only the latest request controls the loading state / final render.
+    if (seq === translateSeq) {
+      state.textLoading = false;
+      updateOutputArea();
+    }
   }
 }
 

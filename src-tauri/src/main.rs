@@ -3,6 +3,7 @@
 mod api;
 mod app_state;
 mod bing_translate;
+mod builtin_translate;
 mod capture;
 mod capture_window;
 mod commands;
@@ -20,6 +21,7 @@ use std::path::PathBuf;
 use api::YoudaoClient;
 use app_state::SharedState;
 use bing_translate::BingTranslateClient;
+use builtin_translate::BuiltinTranslateClient;
 use llm_translate::LlmTranslateClient;
 use commands::{
     begin_capture, begin_copy_capture, cancel_capture, capture_debug_log, clear_history,
@@ -90,7 +92,9 @@ fn main() {
         }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            // Launch silently on boot: the autostart entry runs the app with this
+            // flag so the main window stays hidden (tray only) on OS startup.
+            Some(vec!["--minimized"]),
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
@@ -144,8 +148,9 @@ fn main() {
 
                 let api_client = YoudaoClient::new(general_http.clone());
                 let bing_client = BingTranslateClient::new(bing_http);
+                let builtin_client = BuiltinTranslateClient::new();
                 let llm_client = LlmTranslateClient::new(general_http);
-                let text_translator = TextTranslator::new(bing_client, llm_client);
+                let text_translator = TextTranslator::new(bing_client, builtin_client, llm_client);
                 app_handle.manage(SharedState::new(
                     config_store,
                     settings,
@@ -186,6 +191,23 @@ fn main() {
 
             // ── Intercept window close → hide to tray ────────────────────
             let main_window = app.get_webview_window("main").unwrap();
+
+            // Silent startup: when launched via OS autostart the app is run with
+            // `--minimized`, so keep the main window hidden (tray only). The window
+            // is created hidden (see tauri.conf.json), so a normal launch must
+            // explicitly show it here.
+            let silent_start = std::env::args().any(|arg| arg == "--minimized");
+            if silent_start {
+                let _ = main_window.hide();
+                #[cfg(target_os = "macos")]
+                let _ = app.set_dock_visibility(false);
+            } else {
+                #[cfg(target_os = "macos")]
+                let _ = app.set_dock_visibility(true);
+                let _ = main_window.show();
+                let _ = main_window.set_focus();
+            }
+
             let mw = main_window.clone();
             main_window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {

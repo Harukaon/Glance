@@ -11,10 +11,13 @@ tauri-build = { version = "2.0.1", features = [] }
 arboard = "3"
 base64 = "0.22.1"
 chrono = { version = "0.4.40", features = ["serde"] }
+hmac = "0.12"
 image = { version = "0.25.5", default-features = false, features = ["png", "jpeg", "bmp"] }
 md5 = "0.7.0"
+percent-encoding = "2"
 reqwest = { version = "0.12.12", default-features = false, features = ["json", "multipart", "native-tls"] }
 screenshots = "0.8.10"
+sha2 = "0.10"
 softbuffer = "0.4"
 winit = { version = "0.30", features = ["rwh_06"] }
 serde = { version = "1.0.217", features = ["derive"] }
@@ -32,6 +35,9 @@ uuid = { version = "1.12.1", features = ["serde", "v4"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
 objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSEvent"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.55"
 
 [features]
 default = []

@@ -154,6 +154,10 @@ struct ResultOverlay {
     y: u32,
     w: u32,
     h: u32,
+    /// Whether the translated overlay is currently shown. When false, the
+    /// original (un-translated) screenshot region is shown instead, letting the
+    /// user toggle between original text and translation via right-click.
+    visible: bool,
 }
 
 struct CaptureHandler {
@@ -350,14 +354,43 @@ impl ApplicationHandler<CaptureCommand> for CaptureHandler {
                 }
             }
 
-            // Right-click to cancel capture.
+            // Right-click: when a translation result is shown and the cursor is
+            // inside the selected region, toggle between translation and original
+            // text. Otherwise, right-click cancels the capture.
+            //
+            // Handle this on Released (not Pressed): closing the window on the
+            // press would let the button-up event fall through to whatever window
+            // is now underneath, triggering its native context menu. Consuming
+            // both press and release here keeps the right-click fully contained.
             WindowEvent::MouseInput {
-                state: ElementState::Pressed,
+                state: ElementState::Released,
                 button: MouseButton::Right,
                 ..
             } => {
-                let _ = session.event_tx.send(CaptureEvent::Cancelled);
-                self.close_window();
+                let inside_result = session
+                    .result
+                    .is_some()
+                    .then(|| session.selection)
+                    .flatten()
+                    .map(|(sx, sy, sw, sh)| {
+                        let mx = session.mouse_pos.x;
+                        let my = session.mouse_pos.y;
+                        mx >= sx as f64
+                            && mx < (sx + sw) as f64
+                            && my >= sy as f64
+                            && my < (sy + sh) as f64
+                    })
+                    .unwrap_or(false);
+
+                if inside_result {
+                    if let Some(res) = &mut session.result {
+                        res.visible = !res.visible;
+                    }
+                    session.window.request_redraw();
+                } else {
+                    let _ = session.event_tx.send(CaptureEvent::Cancelled);
+                    self.close_window();
+                }
             }
 
             WindowEvent::CloseRequested => {
@@ -394,7 +427,7 @@ impl ApplicationHandler<CaptureCommand> for CaptureHandler {
             } => {
                 if let HandlerState::Selecting(session) = &mut self.state {
                     let pixels = rgba_to_softbuffer(&rgba_bytes);
-                    session.result = Some(ResultOverlay { pixels, x, y, w, h });
+                    session.result = Some(ResultOverlay { pixels, x, y, w, h, visible: true });
                     session.loading = false;
                     session.window.request_redraw();
                 }
@@ -445,21 +478,43 @@ fn redraw_session(session: &mut CaptureSession) {
     // Start with darkened screenshot.
     buffer.copy_from_slice(&session.darkened_pixels);
 
-    // If there's a result overlay, paint it on top.
+    // If there's a result overlay, paint the translation on top — or, when the
+    // user has toggled it off, show the original (un-darkened) screenshot region
+    // so they can read the source text. Right-click inside the region flips this.
+    // The selection border is drawn in both states so toggling never removes it.
     if let Some(ref res) = session.result {
-        // res.pixels is a compact res.w×res.h image — stride equals res.w, offset (0,0).
-        blit_pixels(
-            &mut buffer,
-            width,
-            &res.pixels,
-            res.w,
-            0,
-            0,
-            res.x,
-            res.y,
-            res.w,
-            res.h,
-        );
+        if res.visible {
+            // res.pixels is a compact res.w×res.h image — stride equals res.w, offset (0,0).
+            blit_pixels(
+                &mut buffer,
+                width,
+                &res.pixels,
+                res.w,
+                0,
+                0,
+                res.x,
+                res.y,
+                res.w,
+                res.h,
+            );
+        } else if let Some((sx, sy, sw, sh)) = session.selection {
+            // Show the original screenshot for the selected region (bright, not dimmed).
+            blit_pixels(
+                &mut buffer,
+                width,
+                &session.original_pixels,
+                session.img_w,
+                sx,
+                sy,
+                sx,
+                sy,
+                sw,
+                sh,
+            );
+        }
+        if let Some((sx, sy, sw, sh)) = session.selection {
+            draw_border(&mut buffer, width, height, sx, sy, sw, sh, 0x004A9EFF, 2);
+        }
         let _ = buffer.present();
         return;
     }

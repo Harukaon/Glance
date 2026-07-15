@@ -46,23 +46,30 @@ impl LlmTranslateClient {
         base_url: &str,
         api_key: &str,
         model: &str,
+        prompt: &str,
+        auto_prompt: &str,
     ) -> AppResult<TextTranslationResult> {
         let from_label = lang_label(from);
         let to_label = lang_label(to);
 
-        let system_prompt = if from == "auto" {
-            format!(
-                "You are a professional translator. Detect the source language and translate the following text to {}. \
-                 Only output the translation, nothing else. Do not add explanations or notes.",
-                to_label
-            )
+        // Pick the prompt template based on whether the source language is
+        // auto-detect. Each has its own user-configurable template, falling back
+        // to the built-in default when empty. `{from}` and `{to}` placeholders
+        // are substituted with the resolved language labels.
+        let template = if from == "auto" {
+            if auto_prompt.trim().is_empty() {
+                crate::models::default_llm_auto_prompt()
+            } else {
+                auto_prompt.to_string()
+            }
+        } else if prompt.trim().is_empty() {
+            crate::models::default_llm_prompt()
         } else {
-            format!(
-                "You are a professional translator. Translate the following text from {} to {}. \
-                 Only output the translation, nothing else. Do not add explanations or notes.",
-                from_label, to_label
-            )
+            prompt.to_string()
         };
+        let system_prompt = template
+            .replace("{from}", from_label)
+            .replace("{to}", to_label);
 
         let url = base_url.trim().to_string();
 
