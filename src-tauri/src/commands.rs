@@ -16,7 +16,7 @@ use crate::capture_window::{self, CaptureCommand, CaptureEvent};
 use crate::error::{AppError, AppResult};
 use crate::models::{
     CaptureMode, CaptureRect, CaptureTranslatePayload, CaptureViewPayload, HistoryQuery,
-    OcrTextResult, OverlayPayload, SelectionPayload, TextTranslationResult,
+    OcrTextResult, OverlayPayload, SelectionPayload, TextHistoryItem, TextTranslationResult,
     TranslationHistoryItem, TranslatorSettings,
 };
 use crate::popup_shortcut::{decide_popup_shortcut_action, PopupShortcutAction};
@@ -191,7 +191,7 @@ pub async fn translate_text(
     from_lang: String,
     to_lang: String,
 ) -> AppResult<TextTranslationResult> {
-    let (engine, llm_config, proxy_url) = {
+    let (engine, llm_config, proxy_url, cache_size) = {
         let settings = state.settings.read().await;
         let proxy_url = match settings.proxy_mode {
             crate::models::ProxyMode::None => None,
@@ -204,9 +204,38 @@ pub async fn translate_text(
             settings.text_translate_engine,
             settings.llm_config.clone(),
             proxy_url,
+            settings.cache_size,
         )
     };
+
+    // Persisted exact-match cache: repeat queries (e.g. re-pasting the same
+    // sentence, undo/redo editing) resolve instantly without another API call.
+    let model = if engine == crate::models::TextTranslateEngine::Llm {
+        llm_config.model.clone()
+    } else {
+        String::new()
+    };
     state
+        .translate_cache
+        .set_max_entries(cache_size)
+        .await;
+    let engine_key = serde_json::to_string(&engine).unwrap_or_default();
+    if let Some(hit) = state
+        .translate_cache
+        .get(&text, &from_lang, &to_lang, &engine_key, &model)
+        .await
+    {
+        tracing::info!(
+            "translate cache hit: engine={engine:?} from={from_lang} to={to_lang}"
+        );
+        return Ok(hit);
+    }
+    tracing::info!(
+        "translate request: engine={engine:?} from={from_lang} to={to_lang} chars={}",
+        text.chars().count()
+    );
+
+    let result = state
         .text_translator
         .translate(
             &text,
@@ -216,7 +245,84 @@ pub async fn translate_text(
             &llm_config,
             proxy_url.as_deref(),
         )
-        .await
+        .await?;
+
+    // Cache the result and record it in the text history (bounded by the
+    // configured limit). Both writes are fire-and-forget so they never block
+    // the response.
+    let cache = state.translate_cache.clone();
+    let cache_text = text.clone();
+    let cache_from = from_lang.clone();
+    let cache_to = to_lang.clone();
+    let cache_engine = engine_key;
+    let cache_model = model;
+    let cache_result = result.clone();
+    tauri::async_runtime::spawn(async move {
+        cache
+            .insert(
+                &cache_text,
+                &cache_from,
+                &cache_to,
+                &cache_engine,
+                &cache_model,
+                cache_result,
+            )
+            .await;
+        cache.save().await;
+    });
+
+    let store = state.config_store.clone();
+    let (history_limit, history_from, history_to, history_engine) = {
+        let settings = state.settings.read().await;
+        (
+            settings.history_limit,
+            settings.from_lang.clone(),
+            settings.to_lang.clone(),
+            serde_json::to_string(&engine).unwrap_or_default(),
+        )
+    };
+    let history_text = text.clone();
+    let history_result = result.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut history = store.load_text_history().await.unwrap_or_default();
+        history.push(TextHistoryItem {
+            id: uuid::Uuid::new_v4().to_string(),
+            created_at: chrono::Utc::now(),
+            from_lang: history_from,
+            to_lang: history_to,
+            engine: history_engine,
+            source: history_text,
+            translated: history_result.translated_text,
+        });
+        if history.len() > history_limit {
+            history.truncate(history_limit);
+        }
+        if let Err(err) = store.save_text_history(&history).await {
+            tracing::warn!("text history save failed: {err}");
+        }
+    });
+
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn clear_text_history(state: State<'_, SharedState>) -> AppResult<()> {
+    state.config_store.save_text_history(&[]).await
+}
+
+#[tauri::command]
+pub async fn list_text_history(state: State<'_, SharedState>) -> AppResult<Vec<TextHistoryItem>> {
+    let mut items = state.config_store.load_text_history().await?;
+    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn clear_translate_cache(state: State<'_, SharedState>) -> AppResult<usize> {
+    let count = state.translate_cache.entry_count().await;
+    state.translate_cache.clear().await;
+    state.translate_cache.save().await;
+    Ok(count)
 }
 
 // ── Window ──────────────────────────────────────────────────────────────────
@@ -949,8 +1055,10 @@ async fn translate_capture_png(
             png_bytes,
             "capture.png".into(),
             "image/png".into(),
-            settings.from_lang.clone(),
-            settings.to_lang.clone(),
+            // 截图内容语言未知，源语言固定交给服务端自动检测，避免与
+            // 文本翻译的 fromLang 设置冲突（如设置 zh-CHS 却截英文图）。
+            "auto".to_string(),
+            settings.capture_to_lang.clone(),
             SelectionPayload {
                 x: 0.0,
                 y: 0.0,

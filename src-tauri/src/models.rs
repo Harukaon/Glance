@@ -51,6 +51,12 @@ pub struct LlmConfig {
     pub prompt: String,
     #[serde(default = "default_llm_auto_prompt")]
     pub auto_prompt: String,
+    #[serde(default = "default_llm_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_llm_max_tokens() -> u32 {
+    4096
 }
 
 fn default_llm_base_url() -> String {
@@ -87,6 +93,7 @@ impl Default for LlmConfig {
             model: default_llm_model(),
             prompt: default_llm_prompt(),
             auto_prompt: default_llm_auto_prompt(),
+            max_tokens: default_llm_max_tokens(),
         }
     }
 }
@@ -96,6 +103,8 @@ impl Default for LlmConfig {
 pub struct TranslatorSettings {
     pub from_lang: String,
     pub to_lang: String,
+    #[serde(default = "default_capture_to_lang")]
+    pub capture_to_lang: String,
     pub clientele: String,
     pub client: String,
     pub vendor: String,
@@ -114,6 +123,8 @@ pub struct TranslatorSettings {
     pub close_on_outside_click: bool,
     #[serde(default)]
     pub autostart: bool,
+    #[serde(default = "default_auto_translate")]
+    pub auto_translate: bool,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
     #[serde(default = "default_copy_hotkey")]
@@ -128,6 +139,18 @@ pub struct TranslatorSettings {
     pub proxy_mode: ProxyMode,
     #[serde(default)]
     pub custom_proxy: String,
+    #[serde(default = "default_history_limit")]
+    pub history_limit: usize,
+    #[serde(default = "default_cache_size")]
+    pub cache_size: usize,
+}
+
+fn default_history_limit() -> usize {
+    200
+}
+
+fn default_cache_size() -> usize {
+    200
 }
 
 impl Default for TranslatorSettings {
@@ -143,6 +166,7 @@ impl Default for TranslatorSettings {
         Self {
             from_lang: "auto".to_string(),
             to_lang: "zh-CHS".to_string(),
+            capture_to_lang: default_capture_to_lang(),
             clientele: "deskdict".to_string(),
             client: "deskdict".to_string(),
             vendor: "fanyiweb_navigation".to_string(),
@@ -165,6 +189,7 @@ impl Default for TranslatorSettings {
             overlay_font_scale: 1.0,
             close_on_outside_click: true,
             autostart: false,
+            auto_translate: default_auto_translate(),
             hotkey: default_hotkey(),
             copy_hotkey: default_copy_hotkey(),
             text_translate_engine: TextTranslateEngine::default(),
@@ -172,6 +197,8 @@ impl Default for TranslatorSettings {
             popup_shortcut: None,
             proxy_mode: ProxyMode::default(),
             custom_proxy: String::new(),
+            history_limit: default_history_limit(),
+            cache_size: default_cache_size(),
         }
     }
 }
@@ -208,6 +235,14 @@ fn default_hotkey() -> String {
 
 fn default_copy_hotkey() -> String {
     "CommandOrControl+Shift+C".to_string()
+}
+
+fn default_auto_translate() -> bool {
+    true
+}
+
+fn default_capture_to_lang() -> String {
+    "zh-CHS".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +324,19 @@ pub struct TextTranslationResult {
     pub from_lang_detected: String,
     #[serde(default)]
     pub alternatives: Vec<String>,
+}
+
+/// One text-translation history entry (persisted in `text_history.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextHistoryItem {
+    pub id: String,
+    pub created_at: DateTime<Utc>,
+    pub from_lang: String,
+    pub to_lang: String,
+    pub engine: String,
+    pub source: String,
+    pub translated: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
