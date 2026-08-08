@@ -79,7 +79,9 @@ impl BuiltinTranslateClient {
             }
         }
 
-        let mut builder = Client::builder();
+        let mut builder = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(10));
         match proxy {
             Some(url) if !url.is_empty() => {
                 if let Ok(p) = reqwest::Proxy::all(url) {

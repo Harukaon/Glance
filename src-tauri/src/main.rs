@@ -13,8 +13,10 @@ mod google_translate;
 mod llm_translate;
 mod models;
 mod popup_shortcut;
+mod secure;
 mod self_test;
 mod startup;
+mod translate_cache;
 mod translate_engine;
 
 use std::path::PathBuf;
@@ -26,9 +28,9 @@ use builtin_translate::BuiltinTranslateClient;
 use llm_translate::LlmTranslateClient;
 use commands::{
     begin_capture, begin_copy_capture, cancel_capture, capture_debug_log, clear_history,
-    close_overlay, hide_window, list_history, load_capture_payload, load_overlay_payload,
-    load_settings, resize_main_window, save_settings, show_overlay, submit_capture_selection,
-    translate_text,
+    clear_text_history, clear_translate_cache, close_overlay, hide_window, list_history,
+    list_text_history, load_capture_payload, load_overlay_payload, load_settings,
+    resize_main_window, save_settings, show_overlay, submit_capture_selection, translate_text,
 };
 use config::ConfigStore;
 use models::TranslatorSettings;
@@ -42,10 +44,46 @@ use tauri::{
 use tauri_plugin_autostart::MacosLauncher;
 use tracing_subscriber::EnvFilter;
 
+/// Wire tracing to a rolling log file (in the app data dir) plus stderr.
+/// Release builds have no console attached (`windows_subsystem = "windows"`),
+/// so without a file the logs would be lost entirely on Windows.
+fn setup_logging() {
+    let filter =
+        EnvFilter::from_default_env().add_directive("info".parse().unwrap());
+
+    if let Some(dir) = dirs_of_log_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let appender = tracing_appender::rolling::daily(dir, "glance.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+        // Keep the non-blocking guard alive for the process lifetime.
+        std::mem::forget(guard);
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(non_blocking)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+    }
+}
+
+fn dirs_of_log_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("GLANCE_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            // Same location as tauri's AppData dir on Windows:
+            // %APPDATA%\com.harukaon.glance\logs
+            let appdata = std::env::var_os("APPDATA")?;
+            Some(
+                std::path::PathBuf::from(appdata)
+                    .join("com.harukaon.glance")
+                    .join("logs"),
+            )
+        })
+}
+
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
-        .init();
+    setup_logging();
 
     if self_test::should_run_capture_self_test() {
         match self_test::run_capture_self_test() {
@@ -126,6 +164,8 @@ fn main() {
                     reqwest::Client::builder()
                         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                         .default_headers(general_headers)
+                        .connect_timeout(std::time::Duration::from_secs(5))
+                        .timeout(std::time::Duration::from_secs(10))
                         .build()?,
                 );
 
@@ -140,6 +180,8 @@ fn main() {
                         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                         .default_headers(bing_headers)
                         .redirect(reqwest::redirect::Policy::none())
+                        .connect_timeout(std::time::Duration::from_secs(5))
+                        .timeout(std::time::Duration::from_secs(10))
                         .build()?,
                 );
 
@@ -214,6 +256,9 @@ fn main() {
             save_settings,
             list_history,
             clear_history,
+            clear_text_history,
+            clear_translate_cache,
+            list_text_history,
             begin_capture,
             begin_copy_capture,
             cancel_capture,
