@@ -113,27 +113,25 @@ impl LlmTranslateClient {
             max_tokens,
         };
 
-        let resp = tokio::time::timeout(
-            LLM_REQUEST_TIMEOUT,
-            self.http
+        let (status, body_text) = tokio::time::timeout(LLM_REQUEST_TIMEOUT, async {
+            let resp = self
+                .http
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
                 .json(&request)
-                .send(),
-        )
+                .send()
+                .await
+                .map_err(AppError::Network)?;
+            let status = resp.status();
+            let body_text = resp.text().await.map_err(AppError::Network)?;
+            Ok::<_, AppError>((status, body_text))
+        })
         .await
-        .map_err(|_| AppError::Timeout("LLM request timed out".into()))?
-        .map_err(|e| AppError::Network(e))?;
-
-        let status = resp.status();
-        let body_text = resp
-            .text()
-            .await
-            .map_err(|e| AppError::Api(format!("LLM translate read body failed: {e}")))?;
+        .map_err(|_| AppError::Timeout("LLM request timed out".into()))??;
 
         if !status.is_success() {
-            let detail = &body_text[..body_text.len().min(500)];
+            let detail = truncate_chars(&body_text, 500);
             return Err(AppError::HttpStatus(
                 status.as_u16(),
                 format!("LLM API error (HTTP {}): {}", status.as_u16(), detail),
@@ -181,6 +179,10 @@ impl LlmTranslateClient {
             alternatives,
         })
     }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 /// Cheap local language guess for auto-detect mode, good enough to drive the
@@ -236,5 +238,18 @@ fn lang_label(code: &str) -> &str {
         "ru" => "Russian",
         "es" => "Spanish",
         _ => code,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_detail_truncation_preserves_utf8_boundaries() {
+        let input = format!("{}🙂tail", "中".repeat(500));
+        let detail = truncate_chars(&input, 500);
+        assert_eq!(detail.chars().count(), 500);
+        assert_eq!(detail, "中".repeat(500));
     }
 }

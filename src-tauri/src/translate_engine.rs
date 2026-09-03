@@ -14,6 +14,11 @@ pub struct TextTranslator {
     llm: Arc<LlmTranslateClient>,
 }
 
+pub struct TranslationOutcome {
+    pub result: TextTranslationResult,
+    pub engine: TextTranslateEngine,
+}
+
 /// How many times a transient failure (timeout, 5xx, 429, network) retries the
 /// primary engine before falling back.
 const MAX_RETRIES: u32 = 2;
@@ -40,12 +45,15 @@ impl TextTranslator {
         engine: TextTranslateEngine,
         llm_config: &LlmConfig,
         proxy: Option<&str>,
-    ) -> AppResult<TextTranslationResult> {
+    ) -> AppResult<TranslationOutcome> {
         // Retry transient failures on the primary engine with a small backoff.
         let mut attempt = 0;
         let primary_err = loop {
-            match self.translate_once(text, from, to, engine, llm_config, proxy).await {
-                Ok(result) => return Ok(result),
+            match self
+                .translate_once(text, from, to, engine, llm_config, proxy)
+                .await
+            {
+                Ok(result) => return Ok(TranslationOutcome { result, engine }),
                 Err(err) if err.is_transient() && attempt < MAX_RETRIES => {
                     attempt += 1;
                     tracing::warn!(
@@ -70,7 +78,10 @@ impl TextTranslator {
             result
                 .alternatives
                 .push("⚠ 主引擎不可用，已自动使用备用引擎".to_string());
-            return Ok(result);
+            return Ok(TranslationOutcome {
+                result,
+                engine: fallback,
+            });
         }
         Err(primary_err)
     }
@@ -115,9 +126,7 @@ impl TextTranslator {
 fn fallback_engine(engine: TextTranslateEngine) -> Option<TextTranslateEngine> {
     match engine {
         TextTranslateEngine::Bing => Some(TextTranslateEngine::Google),
-        TextTranslateEngine::Llm | TextTranslateEngine::Google => {
-            Some(TextTranslateEngine::Bing)
-        }
+        TextTranslateEngine::Llm | TextTranslateEngine::Google => Some(TextTranslateEngine::Bing),
         TextTranslateEngine::Microsoft
         | TextTranslateEngine::Transmart
         | TextTranslateEngine::Yandex

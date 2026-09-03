@@ -25,7 +25,6 @@ use api::YoudaoClient;
 use app_state::SharedState;
 use bing_translate::BingTranslateClient;
 use builtin_translate::BuiltinTranslateClient;
-use llm_translate::LlmTranslateClient;
 use commands::{
     begin_capture, begin_copy_capture, cancel_capture, capture_debug_log, clear_history,
     clear_text_history, clear_translate_cache, close_overlay, hide_window, list_history,
@@ -33,8 +32,8 @@ use commands::{
     resize_main_window, save_settings, show_overlay, submit_capture_selection, translate_text,
 };
 use config::ConfigStore;
+use llm_translate::LlmTranslateClient;
 use models::TranslatorSettings;
-use translate_engine::TextTranslator;
 use tauri::{
     image::Image,
     menu::{MenuBuilder, MenuItemBuilder},
@@ -43,6 +42,8 @@ use tauri::{
 };
 use tauri_plugin_autostart::MacosLauncher;
 use tracing_subscriber::EnvFilter;
+use translate_cache::TranslateCache;
+use translate_engine::TextTranslator;
 
 /// Wire tracing to a rolling log file (in the app data dir) plus stderr.
 /// Release builds have no console attached (`windows_subsystem = "windows"`),
@@ -185,16 +186,30 @@ fn main() {
                         .build()?,
                 );
 
+                // LLM calls can legitimately take longer than the built-in
+                // engines. Their complete request/response timeout is enforced
+                // inside `LlmTranslateClient`, so do not reuse the 10s client.
+                let llm_http = std::sync::Arc::new(
+                    reqwest::Client::builder()
+                        .connect_timeout(std::time::Duration::from_secs(5))
+                        .build()?,
+                );
+
                 let api_client = YoudaoClient::new(general_http.clone());
                 let bing_client = BingTranslateClient::new(bing_http);
                 let builtin_client = BuiltinTranslateClient::new();
-                let llm_client = LlmTranslateClient::new(general_http);
+                let llm_client = LlmTranslateClient::new(llm_http);
                 let text_translator = TextTranslator::new(bing_client, builtin_client, llm_client);
+                let translate_cache = TranslateCache::new(config_store.translate_cache_path());
+                // Complete cache initialization before commands can access the
+                // shared state, eliminating load/insert/save startup races.
+                translate_cache.load().await;
                 app_handle.manage(SharedState::new(
                     config_store,
                     settings,
                     api_client,
                     text_translator,
+                    translate_cache,
                 ));
                 Ok::<(), error::AppError>(())
             })?;

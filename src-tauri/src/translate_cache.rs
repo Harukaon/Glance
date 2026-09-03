@@ -12,14 +12,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
-use crate::models::TextTranslationResult;
+use crate::models::{LlmConfig, TextTranslateEngine, TextTranslationResult};
 
 /// Skip caching very large inputs so the cache file stays small.
 const MAX_CACHED_TEXT_LEN: usize = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CacheEntry {
-    /// sha256 hex of `text|from|to|engine|model`.
+    /// sha256 hex of `text|from|to|engine|configuration variant`.
     key: String,
     result: TextTranslationResult,
     /// Unix timestamp (seconds) of the last access, used for eviction.
@@ -71,12 +71,12 @@ impl TranslateCache {
         from: &str,
         to: &str,
         engine: &str,
-        model: &str,
+        variant: &str,
     ) -> Option<TextTranslationResult> {
         if text.len() > MAX_CACHED_TEXT_LEN {
             return None;
         }
-        let cache_key = make_key(text, from, to, engine, model);
+        let cache_key = make_key(text, from, to, engine, variant);
         let mut state = self.inner.lock().await;
         let now = now_secs();
         let mut hit = false;
@@ -106,7 +106,7 @@ impl TranslateCache {
         from: &str,
         to: &str,
         engine: &str,
-        model: &str,
+        variant: &str,
         result: TextTranslationResult,
     ) {
         if text.len() > MAX_CACHED_TEXT_LEN {
@@ -118,7 +118,7 @@ impl TranslateCache {
         if result.translated_text.trim() == text.trim() {
             return;
         }
-        let cache_key = make_key(text, from, to, engine, model);
+        let cache_key = make_key(text, from, to, engine, variant);
         let mut state = self.inner.lock().await;
         if let Some(entry) = state.entries.iter_mut().find(|e| e.key == cache_key) {
             entry.result = result;
@@ -194,8 +194,12 @@ impl TranslateCache {
     }
 }
 
-fn make_key(text: &str, from: &str, to: &str, engine: &str, model: &str) -> String {
+fn make_key(text: &str, from: &str, to: &str, engine: &str, variant: &str) -> String {
     let mut hasher = Sha256::new();
+    // Version the key so older entries that omitted effective LLM settings can
+    // never be served after an upgrade.
+    hasher.update(b"glance-translation-cache-v2");
+    hasher.update([0u8]);
     hasher.update(text.as_bytes());
     hasher.update([0u8]);
     hasher.update(from.as_bytes());
@@ -204,7 +208,30 @@ fn make_key(text: &str, from: &str, to: &str, engine: &str, model: &str) -> Stri
     hasher.update([0u8]);
     hasher.update(engine.as_bytes());
     hasher.update([0u8]);
-    hasher.update(model.as_bytes());
+    hasher.update(variant.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Settings that can change an LLM translation's output. The API key is
+/// deliberately excluded: credentials do not affect translation semantics.
+pub fn configuration_variant(engine: TextTranslateEngine, llm: &LlmConfig) -> String {
+    if engine != TextTranslateEngine::Llm {
+        return String::new();
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"llm-configuration-v1");
+    for value in [
+        llm.base_url.trim(),
+        llm.model.trim(),
+        llm.prompt.as_str(),
+        llm.auto_prompt.as_str(),
+    ] {
+        hasher.update([0u8]);
+        hasher.update(value.as_bytes());
+    }
+    hasher.update([0u8]);
+    hasher.update(llm.max_tokens.to_le_bytes());
     format!("{:x}", hasher.finalize())
 }
 
@@ -213,4 +240,47 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn llm_configuration_changes_invalidate_cache_variant() {
+        let base = LlmConfig::default();
+        let base_variant = configuration_variant(TextTranslateEngine::Llm, &base);
+
+        let mut cases = Vec::new();
+        let mut changed = base.clone();
+        changed.base_url.push_str("/other");
+        cases.push(changed);
+        let mut changed = base.clone();
+        changed.model.push_str("-other");
+        cases.push(changed);
+        let mut changed = base.clone();
+        changed.prompt.push_str(" Be concise.");
+        cases.push(changed);
+        let mut changed = base.clone();
+        changed.auto_prompt.push_str(" Be concise.");
+        cases.push(changed);
+        let mut changed = base.clone();
+        changed.max_tokens += 1;
+        cases.push(changed);
+
+        for changed in cases {
+            assert_ne!(
+                base_variant,
+                configuration_variant(TextTranslateEngine::Llm, &changed)
+            );
+        }
+    }
+
+    #[test]
+    fn non_llm_engines_ignore_llm_configuration() {
+        assert_eq!(
+            configuration_variant(TextTranslateEngine::Bing, &LlmConfig::default()),
+            ""
+        );
+    }
 }

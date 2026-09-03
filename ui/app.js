@@ -160,23 +160,61 @@ let debounceTimer = null;
 // and re-translate at any time — even mid-translation.
 let translateSeq = 0;
 
-function debouncedTranslate() {
+function clearTranslationTimer() {
   if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = null;
+}
+
+function invalidateTranslation() {
+  clearTranslationTimer();
+  translateSeq++;
+}
+
+function translationContextKey(side) {
+  const isLeft = side !== "right";
+  const settings = state.settings || defaultSettings();
+  return JSON.stringify({
+    side: isLeft ? "left" : "right",
+    text: (isLeft ? state.leftText : state.rightText).trim(),
+    fromLang: isLeft ? settings.fromLang : settings.toLang,
+    toLang: isLeft ? settings.toLang : settings.fromLang,
+    engine: settings.textTranslateEngine,
+    proxyMode: settings.proxyMode,
+    customProxy: settings.customProxy,
+    llmConfig: settings.textTranslateEngine === "llm" ? settings.llmConfig : null
+  });
+}
+
+function isCurrentTranslation(seq, side, contextKey) {
+  return seq === translateSeq &&
+    state.activeSide === side &&
+    translationContextKey(side) === contextKey;
+}
+
+function translationSettingsChanged() {
+  invalidateTranslation();
+  state.textLoading = false;
+  updateSides();
+}
+
+function debouncedTranslate(side) {
+  invalidateTranslation();
+  const scheduledSeq = translateSeq;
+  const source = side === "right" ? state.rightText : state.leftText;
+  const text = (source || "").trim();
+  if (!text) {
+    state.textLoading = false;
+    state.alternatives = [];
+    state.detectedLang = "";
+    if (side === "right") state.leftText = "";
+    else state.rightText = "";
+    updateSides();
+    return;
+  }
+
   debounceTimer = setTimeout(() => {
-    const source = state.activeSide === "right" ? state.rightText : state.leftText;
-    const text = (source || "").trim();
-    if (text) {
-      translateText(state.activeSide === "right" ? "right" : "left");
-    } else {
-      // Source cleared: cancel any in-flight result and reset the output side.
-      translateSeq++;
-      state.textLoading = false;
-      state.alternatives = [];
-      state.detectedLang = "";
-      if (state.activeSide === "right") state.leftText = "";
-      else state.rightText = "";
-      updateSides();
-    }
+    debounceTimer = null;
+    if (scheduledSeq === translateSeq) translateText(side);
   }, 500);
 }
 
@@ -257,16 +295,16 @@ function escapeHtml(v) {
 // 方向规则：左侧输入 → 左侧为源，右侧输出 {toLang} 译文；
 //           右侧输入 → 右侧为源，左侧输出 {fromLang} 译文。
 // 语言错配/混合文本由 LLM 提示词硬规则兜底，不再做前端方向纠正。
-function handlePaste(side, value) {
-  if (!value) return; // 空值不处理，避免覆盖已有文本
-  if (side === "left") {
-    state.leftText = value;
-    state.activeSide = "left";
-  } else {
-    state.rightText = value;
-    state.activeSide = "right";
-  }
-  translateText(side);
+function handlePaste(side, input) {
+  // Run after the browser's default paste so we read the complete textarea
+  // value, including text before/after the insertion point.
+  setTimeout(() => {
+    const value = input.value;
+    if (side === "left") state.leftText = value;
+    else state.rightText = value;
+    state.activeSide = side;
+    translateText(side);
+  }, 0);
 }
 
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -579,26 +617,22 @@ function renderMain() {
   updateSides();
 
 // Events
-  inp.addEventListener("input", e => { state.leftText = e.target.value; state.activeSide = "left"; debouncedTranslate(); });
+  inp.addEventListener("input", e => { state.leftText = e.target.value; state.activeSide = "left"; debouncedTranslate("left"); });
   inp.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); translateText("left"); }
   });
   inp.addEventListener("paste", e => {
-    // 从剪贴板直接取文本，避免与 input 事件处理器的同步清空竞态。
-    const pasted = (e.clipboardData && e.clipboardData.getData("text")) || inp.value;
-    setTimeout(() => handlePaste("left", pasted), 0);
+    handlePaste("left", inp);
   });
-  inpR.addEventListener("input", e => { state.rightText = e.target.value; state.activeSide = "right"; debouncedTranslate(); });
+  inpR.addEventListener("input", e => { state.rightText = e.target.value; state.activeSide = "right"; debouncedTranslate("right"); });
   inpR.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); translateText("right"); }
   });
   inpR.addEventListener("paste", e => {
-    // 从剪贴板直接取文本，避免与 input 事件处理器的同步清空竞态。
-    const pasted = (e.clipboardData && e.clipboardData.getData("text")) || inpR.value;
-    setTimeout(() => handlePaste("right", pasted), 0);
+    handlePaste("right", inpR);
   });
-  document.querySelector("#from-lang").addEventListener("change", e => { state.settings.fromLang = e.target.value; saveSettings().catch(()=>{}); refreshLangSelects(); updateSides(); });
-  document.querySelector("#to-lang").addEventListener("change", e => { state.settings.toLang = e.target.value; saveSettings().catch(()=>{}); refreshLangSelects(); updateSides(); });
+  document.querySelector("#from-lang").addEventListener("change", e => { state.settings.fromLang = e.target.value; translationSettingsChanged(); saveSettings().catch(()=>{}); refreshLangSelects(); });
+  document.querySelector("#to-lang").addEventListener("change", e => { state.settings.toLang = e.target.value; translationSettingsChanged(); saveSettings().catch(()=>{}); refreshLangSelects(); });
   document.querySelector("#capture-to-lang").addEventListener("change", e => { state.settings.captureToLang = e.target.value; saveSettings().catch(()=>{}); });
 
   document.querySelector("#settings-btn").addEventListener("click", e => {
@@ -636,6 +670,7 @@ function renderMain() {
       e.stopPropagation();
       const newEngine = e.currentTarget.dataset.engine;
       state.settings.textTranslateEngine = newEngine;
+      translationSettingsChanged();
       saveSettings().catch(() => {});
       // Update active state
       document.querySelectorAll("#engine-switcher .engine-btn").forEach(b => b.classList.toggle("active", b.dataset.engine === newEngine));
@@ -656,6 +691,7 @@ function renderMain() {
       e.stopPropagation();
       const newMode = e.currentTarget.dataset.proxy;
       state.settings.proxyMode = newMode;
+      translationSettingsChanged();
       saveSettings().catch(() => {});
       document.querySelectorAll("#proxy-switcher .engine-btn").forEach(b => b.classList.toggle("active", b.dataset.proxy === newMode));
       const customRow = document.querySelector("#custom-proxy-row");
@@ -666,7 +702,7 @@ function renderMain() {
     });
   });
   const customProxyInput = document.querySelector("#custom-proxy");
-  if (customProxyInput) customProxyInput.addEventListener("change", e => { state.settings.customProxy = e.target.value.trim(); saveSettings().catch(() => {}); });
+  if (customProxyInput) customProxyInput.addEventListener("change", e => { state.settings.customProxy = e.target.value.trim(); translationSettingsChanged(); saveSettings().catch(() => {}); });
 
   // LLM config inputs
   const baseUrlInput = document.querySelector("#llm-base-url");
@@ -674,11 +710,11 @@ function renderMain() {
   const modelInput = document.querySelector("#llm-model");
   const promptInput = document.querySelector("#llm-prompt");
   const autoPromptInput = document.querySelector("#llm-auto-prompt");
-  if (baseUrlInput) baseUrlInput.addEventListener("change", e => { state.settings.llmConfig.baseUrl = e.target.value.trim(); saveSettings().catch(() => {}); });
-  if (apiKeyInput) apiKeyInput.addEventListener("change", e => { state.settings.llmConfig.apiKey = e.target.value.trim(); saveSettings().catch(() => {}); });
-  if (modelInput) modelInput.addEventListener("change", e => { state.settings.llmConfig.model = e.target.value.trim(); saveSettings().catch(() => {}); });
-  if (promptInput) promptInput.addEventListener("change", e => { state.settings.llmConfig.prompt = e.target.value; syncPresetSelects(); saveSettings().catch(() => {}); });
-  if (autoPromptInput) autoPromptInput.addEventListener("change", e => { state.settings.llmConfig.autoPrompt = e.target.value; syncPresetSelects(); saveSettings().catch(() => {}); });
+  if (baseUrlInput) baseUrlInput.addEventListener("change", e => { state.settings.llmConfig.baseUrl = e.target.value.trim(); translationSettingsChanged(); saveSettings().catch(() => {}); });
+  if (apiKeyInput) apiKeyInput.addEventListener("change", e => { state.settings.llmConfig.apiKey = e.target.value.trim(); translationSettingsChanged(); saveSettings().catch(() => {}); });
+  if (modelInput) modelInput.addEventListener("change", e => { state.settings.llmConfig.model = e.target.value.trim(); translationSettingsChanged(); saveSettings().catch(() => {}); });
+  if (promptInput) promptInput.addEventListener("change", e => { state.settings.llmConfig.prompt = e.target.value; syncPresetSelects(); translationSettingsChanged(); saveSettings().catch(() => {}); });
+  if (autoPromptInput) autoPromptInput.addEventListener("change", e => { state.settings.llmConfig.autoPrompt = e.target.value; syncPresetSelects(); translationSettingsChanged(); saveSettings().catch(() => {}); });
 
   // Keep both preset selects in sync when the user edits the prompts.
   function syncPresetSelects() {
@@ -700,6 +736,7 @@ function renderMain() {
     const a = document.querySelector("#llm-auto-prompt");
     if (p) p.value = built.prompt;
     if (a) a.value = built.autoPrompt;
+    translationSettingsChanged();
     saveSettings().catch(() => {});
   }
 
@@ -745,6 +782,7 @@ function renderMain() {
     const v = parseInt(e.target.value, 10);
     state.settings.llmConfig.maxTokens = Number.isFinite(v) && v > 0 ? v : 4096;
     maxTokensInput.value = state.settings.llmConfig.maxTokens;
+    translationSettingsChanged();
     saveSettings().catch(() => {});
   });
 
@@ -816,9 +854,17 @@ function renderMain() {
     if (!itemEl) return;
     const item = state.textHistoryCache.find(x => x.id === itemEl.dataset.id);
     if (!item) return;
-    state.leftText = item.source;
-    state.rightText = item.translated;
-    state.activeSide = "left";
+    invalidateTranslation();
+    state.textLoading = false;
+    if (item.sourceSide === "right") {
+      state.leftText = item.translated;
+      state.rightText = item.source;
+      state.activeSide = "right";
+    } else {
+      state.leftText = item.source;
+      state.rightText = item.translated;
+      state.activeSide = "left";
+    }
     updateSides();
   });
   document.querySelector("#clear-cache-btn")?.addEventListener("click", e => {
@@ -957,17 +1003,29 @@ async function startCapture() {
 }
 
 async function translateText(side) {
+  side = side === "right" ? "right" : "left";
+  // Manual triggers (Enter/paste) must supersede any pending debounce, while
+  // every new request immediately invalidates all older in-flight requests.
+  invalidateTranslation();
   const isLeft = side !== "right";
   const text = (isLeft ? state.leftText : state.rightText).trim();
-  if (!text) return;
+  if (!text) {
+    state.textLoading = false;
+    updateSides();
+    return;
+  }
 
   // 反向翻译（右侧输入）：源/目标语言互换。
   const fromLang = isLeft ? state.settings.fromLang : state.settings.toLang;
   const toLang = isLeft ? state.settings.toLang : state.settings.fromLang;
-  if (toLang === "auto") return;
+  if (toLang === "auto") {
+    state.textLoading = false;
+    updateSides();
+    return;
+  }
 
-  // Claim this as the latest request; older in-flight ones become stale.
-  const seq = ++translateSeq;
+  const seq = translateSeq;
+  const contextKey = translationContextKey(side);
 
   state.textLoading = true;
   state.status = "";
@@ -978,7 +1036,7 @@ async function translateText(side) {
 
   // Validate LLM config
   if (state.settings.textTranslateEngine === "llm" && !state.settings.llmConfig.apiKey) {
-    if (seq === translateSeq) {
+    if (isCurrentTranslation(seq, side, contextKey)) {
       state.textLoading = false;
       state.status = "请先在设置中配置 API Key";
       state.statusType = "error";
@@ -988,19 +1046,19 @@ async function translateText(side) {
   }
 
   try {
-    const r = await invoke("translate_text", { text, fromLang, toLang });
-    if (seq !== translateSeq) return; // superseded by a newer request
+    const r = await invoke("translate_text", { text, fromLang, toLang, sourceSide: side });
+    if (!isCurrentTranslation(seq, side, contextKey)) return;
     if (isLeft) state.rightText = r.translatedText;
     else state.leftText = r.translatedText;
     state.alternatives = r.alternatives || [];
     state.detectedLang = r.fromLangDetected;
   } catch (err) {
-    if (seq !== translateSeq) return; // superseded; ignore stale error
+    if (!isCurrentTranslation(seq, side, contextKey)) return;
     state.status = String(err);
     state.statusType = "error";
   } finally {
     // Only the latest request controls the loading state / final render.
-    if (seq === translateSeq) {
+    if (isCurrentTranslation(seq, side, contextKey)) {
       state.textLoading = false;
       updateSides();
     }

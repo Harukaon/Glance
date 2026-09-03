@@ -44,18 +44,14 @@ impl SharedState {
         settings: TranslatorSettings,
         api_client: YoudaoClient,
         text_translator: TextTranslator,
+        translate_cache: TranslateCache,
     ) -> Self {
-        let translate_cache = Arc::new(TranslateCache::new(config_store.translate_cache_path()));
-        let cache = translate_cache.clone();
-        tauri::async_runtime::spawn(async move {
-            cache.load().await;
-        });
         Self {
             config_store: Arc::new(config_store),
             settings: Arc::new(RwLock::new(settings)),
             api_client: Arc::new(api_client),
             text_translator: Arc::new(text_translator),
-            translate_cache,
+            translate_cache: Arc::new(translate_cache),
             capture_in_progress: Arc::new(RwLock::new(false)),
             capture_session: Arc::new(RwLock::new(None)),
             capture_mode: Arc::new(RwLock::new(CaptureMode::default())),

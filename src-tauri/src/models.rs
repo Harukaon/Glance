@@ -326,6 +326,14 @@ pub struct TextTranslationResult {
     pub alternatives: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TextSourceSide {
+    #[default]
+    Left,
+    Right,
+}
+
 /// One text-translation history entry (persisted in `text_history.json`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -337,6 +345,8 @@ pub struct TextHistoryItem {
     pub engine: String,
     pub source: String,
     pub translated: String,
+    #[serde(default)]
+    pub source_side: TextSourceSide,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -396,5 +406,26 @@ impl TranslationHistoryItem {
             selection,
             pairs,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_text_history_defaults_to_left_source() {
+        let item: TextHistoryItem = serde_json::from_value(serde_json::json!({
+            "id": "legacy",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "fromLang": "en",
+            "toLang": "zh-CHS",
+            "engine": "bing",
+            "source": "hello",
+            "translated": "你好"
+        }))
+        .unwrap();
+
+        assert_eq!(item.source_side, TextSourceSide::Left);
     }
 }

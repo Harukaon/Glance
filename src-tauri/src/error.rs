@@ -37,7 +37,9 @@ impl AppError {
     pub fn is_transient(&self) -> bool {
         match self {
             // Network failures include DNS, connect and request timeouts.
-            AppError::Network(e) => !e.is_connect() && !e.is_timeout() || e.is_timeout(),
+            AppError::Network(e) => {
+                e.is_connect() || e.is_timeout() || e.is_request() || e.is_body()
+            }
             AppError::Timeout(_) => true,
             // 408 (timeout), 429 (rate limited), 5xx (server errors).
             AppError::HttpStatus(code, _) => {
