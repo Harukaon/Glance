@@ -128,6 +128,9 @@ pub struct TranslatorSettings {
     pub proxy_mode: ProxyMode,
     #[serde(default)]
     pub custom_proxy: String,
+    /// 主窗口置顶（横栏上的图钉按钮）。
+    #[serde(default)]
+    pub pin_on_top: bool,
 }
 
 impl Default for TranslatorSettings {
@@ -172,6 +175,7 @@ impl Default for TranslatorSettings {
             popup_shortcut: None,
             proxy_mode: ProxyMode::default(),
             custom_proxy: String::new(),
+            pin_on_top: false,
         }
     }
 }

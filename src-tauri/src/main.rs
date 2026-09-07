@@ -27,7 +27,8 @@ use llm_translate::LlmTranslateClient;
 use commands::{
     begin_capture, begin_copy_capture, cancel_capture, capture_debug_log, clear_history,
     close_overlay, hide_window, list_history, load_capture_payload, load_overlay_payload,
-    load_settings, resize_main_window, save_settings, show_overlay, submit_capture_selection,
+    load_settings, resize_main_window, save_settings, set_pin_on_top, show_overlay,
+    submit_capture_selection,
     translate_text,
 };
 use config::ConfigStore;
@@ -115,6 +116,7 @@ fn main() {
                     commands::apply_popup_shortcut(&app_handle, popup);
                 }
                 commands::apply_copy_hotkey(&app_handle, &settings.copy_hotkey);
+                commands::apply_pin_on_top(&app_handle, settings.pin_on_top);
 
                 // ── HTTP clients ────────────────────────────────────────────────
                 // General client for Youdao
@@ -224,6 +226,7 @@ fn main() {
             close_overlay,
             translate_text,
             resize_main_window,
+            set_pin_on_top,
             hide_window,
             capture_debug_log
         ])
