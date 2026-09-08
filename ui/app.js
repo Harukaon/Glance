@@ -1,4 +1,5 @@
 import { focusTextInputIfAllowed } from "./focus-helpers.mjs";
+import { shouldTranslateOnInput, shouldTranslateOnEnter } from "./ime-guards.mjs";
 
 const LANGUAGES = [
   { value: "auto", label: "自动检测" },
@@ -387,9 +388,29 @@ function renderMain() {
   inp.value = state.inputText;
 
 // Events
-  inp.addEventListener("input", e => { state.inputText = e.target.value; debouncedTranslate(); });
+  // Tracked IME state: `input` events keep firing while the user is still
+  // picking candidates, so the events alone are not enough to know when text
+  // has actually been committed. See ./ime-guards.mjs.
+  let composing = false;
+  inp.addEventListener("compositionstart", () => { composing = true; });
+  inp.addEventListener("compositionend", () => {
+    composing = false;
+    state.inputText = inp.value;
+    debouncedTranslate();
+  });
+  inp.addEventListener("input", e => {
+    state.inputText = e.target.value;
+    // Translate committed text only — never the raw pinyin/kana buffer.
+    if (!shouldTranslateOnInput(e, composing)) return;
+    debouncedTranslate();
+  });
   inp.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); translateText(); }
+    // While the IME owns the keystroke, Enter belongs to the composition: let it
+    // through untouched so the candidate is committed instead of being eaten by
+    // preventDefault() (which also translated the unfinished buffer).
+    if (!shouldTranslateOnEnter(e, composing)) return;
+    e.preventDefault();
+    translateText();
   });
   inp.addEventListener("paste", () => {
     setTimeout(() => {
