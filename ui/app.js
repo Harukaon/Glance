@@ -46,6 +46,21 @@ const PROXY_MODES = [
 // Reading those would make the window grow a little on every engine switch.
 // Instead we measure the panel's *content* (its `.settings-section` children),
 // which is unaffected by how tall the panel is stretched.
+function applyPin() {
+  const pinned = Boolean(state.settings && state.settings.pinOnTop);
+  const btn = document.querySelector("#pin-btn");
+  if (btn) {
+    btn.classList.toggle("on", pinned);
+    btn.setAttribute("aria-pressed", pinned ? "true" : "false");
+    btn.title = pinned ? "取消置顶" : "置顶窗口";
+    // 按钮里现在只有图标没有文字，辅助技术只能读到 label，所以状态变了要一起改。
+    btn.setAttribute("aria-label", pinned ? "取消置顶" : "置顶窗口");
+  }
+  // 置顶状态是跟着设置存的，所以每次渲染都把它回写到窗口上：换设备/手改过
+  // settings.json 之后，按钮和窗口不会各说各话。
+  invoke?.("set_pin_on_top", { pinned }).catch(() => {});
+}
+
 function settingsHeight() {
   const appEl = document.querySelector(".bento-app");
   const header = document.querySelector(".header-block");
@@ -168,7 +183,8 @@ function defaultSettings() {
     },
     popupShortcut: null,
     proxyMode: "system",
-    customProxy: ""
+    customProxy: "",
+    pinOnTop: false
   };
 }
 
@@ -276,7 +292,8 @@ function renderMain() {
           </div>
         </div>
         <div class="header-right">
-          <button class="capture-btn" id="capture-btn" title="截图翻译">⛶ 截图翻译</button>
+          <button class="pin-btn${state.settings.pinOnTop ? " on" : ""}" id="pin-btn" title="置顶窗口" aria-label="置顶窗口" aria-pressed="${state.settings.pinOnTop ? "true" : "false"}"><svg class="pin-ico" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false"><rect x="3" y="2.2" width="10" height="4.4" rx="1.8"/><rect x="7" y="6.2" width="2" height="5.4" rx="1"/><path d="M6.3 11.6h3.4L8 14.4z"/></svg></button>
+          <button class="capture-btn" id="capture-btn" title="截图翻译">⛶ <span class="btn-label">截图翻译</span></button>
           <button class="settings-btn" id="settings-btn" title="设置">⚙</button>
         </div>
       </div>
@@ -444,6 +461,13 @@ function renderMain() {
   });
   document.querySelector("#tts-btn").addEventListener("click", speakInput);
 
+  // 置顶：状态从 settings 走，按钮高亮和窗口实际 topmost 都由 applyPin 同步。
+  document.querySelector("#pin-btn").addEventListener("click", e => {
+    e.stopPropagation();
+    state.settings.pinOnTop = !state.settings.pinOnTop;
+    applyPin();
+    saveSettings().catch(() => {});
+  });
   document.querySelector("#capture-btn").addEventListener("click", e => { e.stopPropagation(); startCapture(); });
   document.querySelector("#shortcut-row").addEventListener("click", e => { e.stopPropagation(); startHotkeyRecording(); });
   document.querySelector("#copy-shortcut-row").addEventListener("click", e => { e.stopPropagation(); startCopyHotkeyRecording(); });
@@ -499,6 +523,8 @@ function renderMain() {
   if (promptInput) promptInput.addEventListener("change", e => { state.settings.llmConfig.prompt = e.target.value; saveSettings().catch(() => {}); });
   if (autoPromptInput) autoPromptInput.addEventListener("change", e => { state.settings.llmConfig.autoPrompt = e.target.value; saveSettings().catch(() => {}); });
 
+  // 启动时把已保存的置顶状态回写到窗口上（Rust 侧 setup 阶段窗口可能还没建好）。
+  applyPin();
   inp.focus();
 }
 

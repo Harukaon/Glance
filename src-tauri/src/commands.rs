@@ -221,6 +221,22 @@ pub async fn translate_text(
 
 // ── Window ──────────────────────────────────────────────────────────────────
 
+/// 把置顶状态应用到主窗口。启动时按已存设置应用一次，用户点图钉时由前端调
+/// `set_pin_on_top` 命令再应用。走命令而不是前端的 window API，capabilities
+/// 里就不用额外开 `core:window:allow-set-always-on-top`。
+pub fn apply_pin_on_top(app: &AppHandle, pinned: bool) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_always_on_top(pinned);
+    }
+}
+
+/// 主窗口置顶开关。
+#[tauri::command]
+pub async fn set_pin_on_top(app: AppHandle, pinned: bool) -> AppResult<()> {
+    apply_pin_on_top(&app, pinned);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn resize_main_window(app: AppHandle, height: f64) -> AppResult<()> {
     if let Some(w) = app.get_webview_window("main") {
