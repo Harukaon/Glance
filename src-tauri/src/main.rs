@@ -5,6 +5,7 @@ mod app_state;
 mod bing_translate;
 mod builtin_translate;
 mod capture;
+mod capture_hotkey;
 mod capture_window;
 mod commands;
 mod config;
@@ -250,6 +251,7 @@ fn show_main_window(app: &tauri::AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
     }
+    commands::note_main_window_shown(app, true);
 }
 
 #[cfg(target_os = "macos")]
@@ -258,6 +260,7 @@ fn hide_main_window_to_background(app: &tauri::AppHandle) {
         let _ = w.hide();
     }
     let _ = app.set_dock_visibility(false);
+    commands::note_main_window_shown(app, false);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -265,4 +268,5 @@ fn hide_main_window_to_background(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
     }
+    commands::note_main_window_shown(app, false);
 }

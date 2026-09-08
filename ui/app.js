@@ -216,6 +216,27 @@ function languageOptions(current) {
   ).join("");
 }
 
+function fallbackTargetLang(fromLang) {
+  const detected = state.detectedLang;
+  if (detected && detected !== "auto" && detected !== fromLang) return detected;
+  return fromLang === "zh-CHS" ? "en" : "zh-CHS";
+}
+
+function swapLanguages() {
+  if (!state.settings) return;
+  const from = state.settings.fromLang;
+  const to = state.settings.toLang;
+  const nextFrom = to === "auto" ? fallbackTargetLang(from) : to;
+  const nextTo = from === "auto" ? fallbackTargetLang(nextFrom) : from;
+  state.settings.fromLang = nextFrom;
+  state.settings.toLang = nextTo;
+  const fromEl = document.querySelector("#from-lang");
+  const toEl = document.querySelector("#to-lang");
+  if (fromEl) fromEl.value = nextFrom;
+  if (toEl) toEl.value = nextTo;
+  saveSettings().catch(() => {});
+}
+
 function shortcutKeysHtml(hk) {
   const parts = hk.replace("CommandOrControl", "Ctrl").split("+");
   return parts.map(p => `<span class="shortcut-key">${escapeHtml(p)}</span>`).join(" + ");
@@ -229,7 +250,8 @@ function renderFatal(msg) {
 
 async function ensureTauriApi() {
   if (invoke && listen) return;
-  for (let i = 0; i < 100; i++) {
+  const attempts = (window.__TAURI__ || window.__TAURI_INTERNALS__) ? 100 : 5;
+  for (let i = 0; i < attempts; i++) {
     const t = window.__TAURI__;
     const ti = window.__TAURI_INTERNALS__;
     const nextInvoke = t?.core?.invoke || ti?.invoke;
@@ -241,7 +263,15 @@ async function ensureTauriApi() {
     }
     await delay(20);
   }
-  throw new Error("Tauri runtime unavailable");
+  // Browser preview: keep the UI usable when the Tauri runtime is absent.
+  invoke = async (cmd, args) => {
+    if (cmd === "load_settings") return defaultSettings();
+    if (cmd === "save_settings") return args?.settings || defaultSettings();
+    if (cmd === "list_history") return [];
+    if (cmd === "resize_main_window" || cmd === "hide_window" || cmd === "close_overlay") return null;
+    throw new Error("当前是浏览器预览，截图/翻译需要桌面应用");
+  };
+  listen = async () => () => {};
 }
 
 async function loadSettings() { state.settings = await invoke("load_settings"); }
@@ -287,7 +317,7 @@ function renderMain() {
           <div class="app-title">Glance</div>
           <div class="lang-pill">
             <select id="from-lang">${languageOptions(state.settings.fromLang)}</select>
-            <span class="lang-icon">➔</span>
+            <button type="button" class="lang-swap" id="lang-swap" title="交换源语言和目标语言" aria-label="交换源语言和目标语言">⇄</button>
             <select id="to-lang">${languageOptions(state.settings.toLang)}</select>
           </div>
         </div>
@@ -437,6 +467,10 @@ function renderMain() {
   });
   document.querySelector("#from-lang").addEventListener("change", e => { state.settings.fromLang = e.target.value; saveSettings().catch(()=>{}); });
   document.querySelector("#to-lang").addEventListener("change", e => { state.settings.toLang = e.target.value; saveSettings().catch(()=>{}); });
+  document.querySelector("#lang-swap").addEventListener("click", e => {
+    e.stopPropagation();
+    swapLanguages();
+  });
 
   document.querySelector("#settings-btn").addEventListener("click", e => {
     e.stopPropagation();

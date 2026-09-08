@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -34,6 +35,9 @@ pub struct SharedState {
     pub capture_session: Arc<RwLock<Option<ActiveCaptureSession>>>,
     pub capture_mode: Arc<RwLock<CaptureMode>>,
     pub overlay_payload: Arc<RwLock<Option<OverlayPayload>>>,
+    /// Logical main-window visibility. Windows `is_visible()` is unreliable
+    /// around global shortcuts (focus is stolen before the handler runs).
+    pub main_window_shown: Arc<AtomicBool>,
 }
 
 impl SharedState {
@@ -52,6 +56,15 @@ impl SharedState {
             capture_session: Arc::new(RwLock::new(None)),
             capture_mode: Arc::new(RwLock::new(CaptureMode::default())),
             overlay_payload: Arc::new(RwLock::new(None)),
+            main_window_shown: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn set_main_window_shown(&self, shown: bool) {
+        self.main_window_shown.store(shown, Ordering::SeqCst);
+    }
+
+    pub fn main_window_shown(&self) -> bool {
+        self.main_window_shown.load(Ordering::SeqCst)
     }
 }

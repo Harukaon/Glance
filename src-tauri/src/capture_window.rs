@@ -4,7 +4,7 @@ use std::sync::{mpsc, Arc, OnceLock};
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Fullscreen, Window, WindowId, WindowLevel};
 
@@ -137,6 +137,11 @@ struct CaptureSession {
     selection: Option<(u32, u32, u32, u32)>,
     is_dragging: bool,
     mouse_pos: PhysicalPosition<f64>,
+    /// Primary finger currently drawing a selection. Windows touch/pen arrives as
+    /// `WindowEvent::Touch` (WM_POINTER), not as synthesized mouse events.
+    active_touch: Option<u64>,
+    touch_start: Option<PhysicalPosition<f64>>,
+    touch_moved: bool,
     // Result overlay
     result: Option<ResultOverlay>,
     // Loading animation
@@ -240,6 +245,9 @@ impl CaptureHandler {
             selection: None,
             is_dragging: false,
             mouse_pos: PhysicalPosition::new(0.0, 0.0),
+            active_touch: None,
+            touch_start: None,
+            touch_moved: false,
             result: None,
             loading: false,
             loading_start: None,
@@ -325,32 +333,30 @@ impl ApplicationHandler<CaptureCommand> for CaptureHandler {
                 button: MouseButton::Left,
                 ..
             } => {
-                match state {
-                    ElementState::Pressed => {
-                        session.drag_start = Some(session.mouse_pos);
-                        session.is_dragging = true;
-                        session.selection = None;
-                        session.result = None;
+                // WM_POINTER already became Touch; ignore the leftover mouse
+                // synthesis if a finger is currently driving the selection.
+                if session.active_touch.is_none() {
+                    match state {
+                        ElementState::Pressed => begin_drag(session, session.mouse_pos),
+                        ElementState::Released => end_drag(session, session.mouse_pos),
                     }
-                    ElementState::Released => {
-                        if session.is_dragging {
-                            if let Some(start) = session.drag_start {
-                                let rect = normalize_rect(start, session.mouse_pos);
-                                session.selection = Some(rect);
-                            }
-                            session.is_dragging = false;
-                            session.drag_start = None;
-                            finish_selection(session);
-                        }
-                    }
+                    session.window.request_redraw();
                 }
-                session.window.request_redraw();
             }
 
             WindowEvent::CursorMoved { position, .. } => {
-                session.mouse_pos = position;
-                if session.is_dragging {
-                    session.window.request_redraw();
+                if session.active_touch.is_none() {
+                    session.mouse_pos = position;
+                    if session.is_dragging {
+                        session.window.request_redraw();
+                    }
+                }
+            }
+
+            WindowEvent::Touch(touch) => {
+                if handle_touch(session, touch) {
+                    let _ = session.event_tx.send(CaptureEvent::Cancelled);
+                    self.close_window();
                 }
             }
 
@@ -367,27 +373,7 @@ impl ApplicationHandler<CaptureCommand> for CaptureHandler {
                 button: MouseButton::Right,
                 ..
             } => {
-                let inside_result = session
-                    .result
-                    .is_some()
-                    .then(|| session.selection)
-                    .flatten()
-                    .map(|(sx, sy, sw, sh)| {
-                        let mx = session.mouse_pos.x;
-                        let my = session.mouse_pos.y;
-                        mx >= sx as f64
-                            && mx < (sx + sw) as f64
-                            && my >= sy as f64
-                            && my < (sy + sh) as f64
-                    })
-                    .unwrap_or(false);
-
-                if inside_result {
-                    if let Some(res) = &mut session.result {
-                        res.visible = !res.visible;
-                    }
-                    session.window.request_redraw();
-                } else {
+                if apply_secondary_action(session, session.mouse_pos) {
                     let _ = session.event_tx.send(CaptureEvent::Cancelled);
                     self.close_window();
                 }
@@ -567,6 +553,125 @@ fn redraw_session(session: &mut CaptureSession) {
     if !session.shown {
         session.shown = true;
         session.window.set_visible(true);
+    }
+}
+
+const TOUCH_TAP_SLOP: f64 = 10.0;
+
+fn pointer_in_selection(session: &CaptureSession, pos: PhysicalPosition<f64>) -> bool {
+    session
+        .selection
+        .map(|(sx, sy, sw, sh)| {
+            pos.x >= sx as f64
+                && pos.x < (sx + sw) as f64
+                && pos.y >= sy as f64
+                && pos.y < (sy + sh) as f64
+        })
+        .unwrap_or(false)
+}
+
+fn begin_drag(session: &mut CaptureSession, pos: PhysicalPosition<f64>) {
+    session.mouse_pos = pos;
+    session.drag_start = Some(pos);
+    session.is_dragging = true;
+    session.selection = None;
+    session.result = None;
+}
+
+fn end_drag(session: &mut CaptureSession, pos: PhysicalPosition<f64>) {
+    session.mouse_pos = pos;
+    if session.is_dragging {
+        if let Some(start) = session.drag_start {
+            session.selection = Some(normalize_rect(start, session.mouse_pos));
+        }
+        session.is_dragging = false;
+        session.drag_start = None;
+        finish_selection(session);
+    }
+}
+
+/// Toggle original/translation when the pointer is inside a result; otherwise
+/// cancel. Returns `true` when the capture window should close.
+fn apply_secondary_action(session: &mut CaptureSession, pos: PhysicalPosition<f64>) -> bool {
+    session.mouse_pos = pos;
+    if session.result.is_some() && pointer_in_selection(session, pos) {
+        if let Some(res) = &mut session.result {
+            res.visible = !res.visible;
+        }
+        session.window.request_redraw();
+        false
+    } else {
+        true
+    }
+}
+
+/// Handle a finger/pen event. Returns `true` when the capture should cancel.
+fn handle_touch(session: &mut CaptureSession, touch: Touch) -> bool {
+    match touch.phase {
+        TouchPhase::Started => {
+            if session.active_touch.is_some() {
+                return apply_secondary_action(session, touch.location);
+            }
+            session.active_touch = Some(touch.id);
+            session.touch_start = Some(touch.location);
+            session.touch_moved = false;
+            session.mouse_pos = touch.location;
+            session.drag_start = Some(touch.location);
+            session.is_dragging = true;
+            if session.result.is_none() {
+                session.selection = None;
+            }
+            session.window.request_redraw();
+            false
+        }
+        TouchPhase::Moved => {
+            if session.active_touch != Some(touch.id) {
+                return false;
+            }
+            if let Some(start) = session.touch_start {
+                if (touch.location.x - start.x).abs() > TOUCH_TAP_SLOP
+                    || (touch.location.y - start.y).abs() > TOUCH_TAP_SLOP
+                {
+                    if !session.touch_moved && session.result.is_some() {
+                        session.result = None;
+                        session.selection = None;
+                    }
+                    session.touch_moved = true;
+                }
+            }
+            session.mouse_pos = touch.location;
+            if session.is_dragging {
+                session.window.request_redraw();
+            }
+            false
+        }
+        TouchPhase::Ended | TouchPhase::Cancelled => {
+            if session.active_touch != Some(touch.id) {
+                return false;
+            }
+            session.active_touch = None;
+            let moved = session.touch_moved;
+            session.touch_start = None;
+            session.touch_moved = false;
+
+            if touch.phase == TouchPhase::Cancelled {
+                session.is_dragging = false;
+                session.drag_start = None;
+                session.window.request_redraw();
+                return false;
+            }
+
+            session.mouse_pos = touch.location;
+            if !moved && session.result.is_some() {
+                session.is_dragging = false;
+                session.drag_start = None;
+                return apply_secondary_action(session, touch.location);
+            }
+
+            end_drag(session, touch.location);
+            session.window.request_redraw();
+            false
+        }
     }
 }
 

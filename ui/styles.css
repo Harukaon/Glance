@@ -101,7 +101,20 @@ body.capture-preparing *::after {
   border-radius: 6px;
 }
 .lang-pill select:hover { background: rgba(0,0,0,0.04); }
-.lang-icon { color: #A1A1AA; font-size: 12px; }
+.lang-swap {
+  color: #A1A1AA;
+  font-size: 14px;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.lang-swap:hover {
+  background: rgba(0,0,0,0.04);
+  color: var(--text-main);
+}
 
 /* Toggle */
 .toggle {
@@ -549,12 +562,14 @@ body[data-mode="capture"] {
   background: #000;
   overflow: hidden;
   user-select: none;
+  touch-action: none;
 }
 .capture-root {
   position: fixed;
   inset: 0;
   overflow: hidden;
   cursor: crosshair;
+  touch-action: none;
 }
 .capture-screen {
   position: absolute;

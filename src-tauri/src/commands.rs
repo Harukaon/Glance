@@ -19,6 +19,7 @@ use crate::models::{
     OcrTextResult, OverlayPayload, SelectionPayload, TextTranslationResult,
     TranslationHistoryItem, TranslatorSettings,
 };
+use crate::capture_hotkey::{decide_capture_hotkey_action, CaptureHotkeyAction};
 use crate::popup_shortcut::{decide_popup_shortcut_action, PopupShortcutAction};
 
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
@@ -90,7 +91,7 @@ pub fn apply_hotkey(app: &AppHandle, hotkey: &str) {
                 let app2 = app_clone.clone();
                 tauri::async_runtime::spawn(async move {
                     let state: State<'_, SharedState> = app2.state();
-                    let _ = crate::commands::begin_capture(app2.clone(), state).await;
+                    let _ = crate::commands::toggle_capture(app2.clone(), state, CaptureMode::Translate).await;
                 });
             }
         })
@@ -142,7 +143,7 @@ pub fn apply_copy_hotkey(app: &AppHandle, hotkey: &str) {
                 let app2 = app_clone.clone();
                 tauri::async_runtime::spawn(async move {
                     let state: State<'_, SharedState> = app2.state();
-                    let _ = crate::commands::begin_copy_capture(app2.clone(), state).await;
+                    let _ = crate::commands::toggle_capture(app2.clone(), state, CaptureMode::CopyText).await;
                 });
             }
         })
@@ -260,9 +261,16 @@ pub async fn hide_window(app: AppHandle) -> AppResult<()> {
     if let Some(w) = app.get_webview_window("main") {
         instant_hide(&w);
     }
+    note_main_window_shown(&app, false);
     #[cfg(target_os = "macos")]
     app.set_dock_visibility(false)?;
     Ok(())
+}
+
+pub fn note_main_window_shown(app: &AppHandle, shown: bool) {
+    if let Some(state) = app.try_state::<SharedState>() {
+        state.set_main_window_shown(shown);
+    }
 }
 
 fn instant_hide(window: &tauri::WebviewWindow) {
@@ -282,9 +290,13 @@ fn instant_hide(window: &tauri::WebviewWindow) {
 
 fn hide_main_window_before_capture(app: &AppHandle) -> bool {
     if let Some(main_window) = app.get_webview_window("main") {
-        let was_visible = main_window.is_visible().unwrap_or(false);
-        if was_visible {
+        let was_visible = app
+            .try_state::<SharedState>()
+            .map(|state| state.main_window_shown())
+            .unwrap_or_else(|| main_window.is_visible().unwrap_or(false));
+        if was_visible || main_window.is_visible().unwrap_or(false) {
             instant_hide(&main_window);
+            note_main_window_shown(app, false);
         }
         was_visible
     } else {
@@ -297,10 +309,16 @@ fn toggle_main_window_from_popup_shortcut(app: &AppHandle) -> AppResult<()> {
         return Ok(());
     };
 
-    let is_visible = window.is_visible().unwrap_or(false);
-    match decide_popup_shortcut_action(is_visible) {
+    // Prefer the logical flag: global shortcuts steal focus, so OS
+    // `is_visible()` / `is_focused()` often look like the window is gone.
+    let is_shown = app
+        .try_state::<SharedState>()
+        .map(|state| state.main_window_shown())
+        .unwrap_or_else(|| window.is_visible().unwrap_or(false));
+    match decide_popup_shortcut_action(is_shown) {
         PopupShortcutAction::HideWindow => {
             instant_hide(&window);
+            note_main_window_shown(app, false);
             #[cfg(target_os = "macos")]
             app.set_dock_visibility(false)?;
         }
@@ -310,6 +328,7 @@ fn toggle_main_window_from_popup_shortcut(app: &AppHandle) -> AppResult<()> {
             let _ = window.unminimize();
             let _ = window.show();
             let _ = window.set_focus();
+            note_main_window_shown(app, true);
             // 显示窗口由后端负责，真正聚焦哪个输入控件交给前端决定，避免后端耦合 DOM 细节。
             app.emit_to("main", FOCUS_TEXT_INPUT_EVENT, serde_json::json!({}))?;
         }
@@ -336,6 +355,18 @@ pub async fn begin_capture(app: AppHandle, state: State<'_, SharedState>) -> App
 #[tauri::command]
 pub async fn begin_copy_capture(app: AppHandle, state: State<'_, SharedState>) -> AppResult<()> {
     begin_capture_with_mode(app, state, CaptureMode::CopyText).await
+}
+
+async fn toggle_capture(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    mode: CaptureMode,
+) -> AppResult<()> {
+    let in_progress = *state.capture_in_progress.read().await;
+    match decide_capture_hotkey_action(in_progress) {
+        CaptureHotkeyAction::Cancel => cancel_capture(app, state).await,
+        CaptureHotkeyAction::Start => begin_capture_with_mode(app, state, mode).await,
+    }
 }
 
 async fn begin_capture_with_mode(
@@ -905,6 +936,7 @@ async fn restore_main_window_if_needed(app: &AppHandle, state: &SharedState) {
         if let Some(main_window) = app.get_webview_window("main") {
             let _ = main_window.show();
             let _ = main_window.set_focus();
+            note_main_window_shown(app, true);
         }
     }
 }

@@ -8,6 +8,8 @@ const state = {
   dragging: false,
   dragStart: null,
   dragCurrent: null,
+  activePointerId: null,
+  pointerMoved: false,
   selectionCss: null,
   selectionImage: null,
   loading: false,
@@ -17,6 +19,10 @@ const state = {
   showResult: true,
   error: ""
 };
+
+const HINT_PREPARING = "正在准备截图… · Esc/右键/双指取消";
+const HINT_SELECT = "拖拽或滑动选择区域 · Esc/右键/双指取消";
+const TOUCH_TAP_SLOP = 10;
 
 const bootStartedAt = performance.now();
 let timelineSeq = 0;
@@ -116,7 +122,7 @@ function updatePreviewImages() {
   if (!state.payload) {
     screenEl.removeAttribute("src");
     previewEl.removeAttribute("src");
-    hintEl.textContent = "正在准备截图… · Esc/右键取消";
+    hintEl.textContent = HINT_PREPARING;
     return;
   }
 
@@ -129,7 +135,7 @@ function updatePreviewImages() {
   previewEl.src = src;
   state.previewReady = true;
   if (!state.selectionCss && !state.loading) {
-    hintEl.textContent = "拖拽选择区域 · Esc/右键取消";
+    hintEl.textContent = HINT_SELECT;
   }
 }
 
@@ -148,7 +154,7 @@ function updateSelectionLayer() {
 
   if (!state.selectionCss) {
     selectionEl.hidden = true;
-    hintEl.textContent = state.previewReady ? "拖拽选择区域 · Esc/右键取消" : "正在准备截图… · Esc/右键取消";
+    hintEl.textContent = state.previewReady ? HINT_SELECT : HINT_PREPARING;
     return;
   }
 
@@ -176,7 +182,7 @@ function updateSelectionLayer() {
   } else {
     resultEl.hidden = true;
     previewEl.hidden = false;
-    hintEl.textContent = state.loading ? loadingHintText() : "拖拽选择区域 · Esc/右键取消";
+    hintEl.textContent = state.loading ? loadingHintText() : HINT_SELECT;
   }
 }
 
@@ -233,6 +239,29 @@ async function submitSelection(rectCss) {
   }
 }
 
+function applySecondaryAction(event) {
+  if (state.resultImageBase64 && pointerWithinSelection(event)) {
+    state.showResult = !state.showResult;
+    updateSelectionLayer();
+    return;
+  }
+  cancelCapture();
+}
+
+function beginSelectionDrag(event) {
+  state.dragging = true;
+  state.activePointerId = event.pointerId;
+  state.pointerMoved = false;
+  state.dragStart = pointFromEvent(event);
+  state.dragCurrent = state.dragStart;
+  if (!state.resultImageBase64) {
+    state.selectionCss = null;
+    state.selectionImage = null;
+  }
+  setError("");
+  updateSelectionLayer();
+}
+
 function bindCaptureEvents() {
   const root = document.querySelector("#capture-root");
   if (!root) return;
@@ -242,48 +271,74 @@ function bindCaptureEvents() {
     // When a translation result is shown and the right-click lands inside the
     // selected region, toggle between translation and original text instead of
     // cancelling. Right-click outside the region (or with no result) cancels.
-    if (state.resultImageBase64 && pointerWithinSelection(event)) {
-      state.showResult = !state.showResult;
-      updateSelectionLayer();
+    applySecondaryAction(event);
+  });
+
+  root.addEventListener("pointerdown", (event) => {
+    if (state.loading || !state.previewReady) return;
+    if (state.activePointerId != null && event.pointerId !== state.activePointerId) {
+      event.preventDefault();
+      applySecondaryAction(event);
       return;
     }
-    cancelCapture();
+    if (event.button !== 0) return;
+    event.preventDefault();
+    try { root.setPointerCapture(event.pointerId); } catch (_err) {}
+    beginSelectionDrag(event);
   });
 
-  root.addEventListener("mousedown", (event) => {
-    if (event.button !== 0 || state.loading || !state.previewReady) return;
-    state.dragging = true;
-    state.dragStart = pointFromEvent(event);
-    state.dragCurrent = state.dragStart;
-    state.selectionCss = null;
-    state.selectionImage = null;
-    state.resultImageBase64 = "";
-    setError("");
-    updateSelectionLayer();
-  });
-
-  root.addEventListener("mousemove", (event) => {
-    if (!state.dragging) return;
-    state.dragCurrent = pointFromEvent(event);
-    state.selectionCss = normalizeRect(state.dragStart, state.dragCurrent, getRootRect());
-    updateSelectionLayer();
-  });
-
-  root.addEventListener("mouseup", async (event) => {
-    if (event.button === 2) {
-      // Right-click is handled by the contextmenu listener (toggle inside the
-      // result region, cancel otherwise); avoid cancelling here as well.
-      if (state.resultImageBase64 && pointerWithinSelection(event)) {
-        return;
+  root.addEventListener("pointermove", (event) => {
+    if (!state.dragging || event.pointerId !== state.activePointerId) return;
+    event.preventDefault();
+    const next = pointFromEvent(event);
+    if (!state.pointerMoved && state.dragStart) {
+      if (Math.abs(next.x - state.dragStart.x) > TOUCH_TAP_SLOP
+          || Math.abs(next.y - state.dragStart.y) > TOUCH_TAP_SLOP) {
+        state.pointerMoved = true;
+        if (state.resultImageBase64) {
+          state.resultImageBase64 = "";
+          state.selectionCss = null;
+          state.selectionImage = null;
+        }
       }
-      await cancelCapture();
+    }
+    state.dragCurrent = next;
+    if (state.pointerMoved || !state.resultImageBase64) {
+      state.selectionCss = normalizeRect(state.dragStart, state.dragCurrent, getRootRect());
+    }
+    updateSelectionLayer();
+  });
+
+  root.addEventListener("pointerup", async (event) => {
+    if (event.pointerId !== state.activePointerId) return;
+    if (event.button === 2) {
+      state.dragging = false;
+      state.activePointerId = null;
       return;
     }
     if (event.button !== 0 || !state.dragging) return;
+    event.preventDefault();
     state.dragging = false;
+    state.activePointerId = null;
     state.dragCurrent = pointFromEvent(event);
+    if (!state.pointerMoved && state.resultImageBase64) {
+      applySecondaryAction(event);
+      return;
+    }
     const rectCss = normalizeRect(state.dragStart, state.dragCurrent, getRootRect());
     await submitSelection(rectCss);
+  });
+
+  root.addEventListener("pointercancel", (event) => {
+    if (event.pointerId !== state.activePointerId) return;
+    state.dragging = false;
+    state.activePointerId = null;
+    state.pointerMoved = false;
+    if (!state.resultImageBase64) {
+      state.selectionCss = null;
+      state.selectionImage = null;
+    }
+    updateSelectionLayer();
   });
 
   window.addEventListener("keydown", (event) => {
@@ -310,7 +365,7 @@ function renderCapture() {
         <img class="capture-selection-result" id="capture-selection-result" alt="" hidden />
         <div class="capture-spinner" id="capture-spinner" hidden></div>
       </div>
-      <div class="capture-hint" id="capture-hint">正在准备截图… · Esc/右键取消</div>
+      <div class="capture-hint" id="capture-hint">正在准备截图… · Esc/右键/双指取消</div>
       <div class="capture-error" id="capture-error" hidden></div>
     </div>`;
 
