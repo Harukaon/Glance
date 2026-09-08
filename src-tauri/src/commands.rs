@@ -520,16 +520,19 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
         );
 
         let scale_factor = monitor.scale_factor;
-        let screen = result.screen;
-
-        let (rgba, w, h) =
-            tokio::task::spawn_blocking(move || capture::capture_screen_to_memory(screen))
-                .await
-                .map_err(|e| AppError::Capture(format!("capture task failed: {e}")))??;
+        // Capture every display into one virtual desktop so one selection can
+        // cross monitor boundaries without restarting the screenshot flow.
+        let desktop = tokio::task::spawn_blocking(capture::capture_virtual_desktop_to_memory)
+            .await
+            .map_err(|e| AppError::Capture(format!("capture task failed: {e}")))??;
+        let rgba = desktop.rgba;
+        let w = desktop.width;
+        let h = desktop.height;
 
         tracing::info!(
-            "[PERF] capture_to_memory: {:?} | {}x{} ({:.1} MB RGBA)",
+            "[PERF] capture_virtual_desktop: {:?} | {} displays, {}x{} ({:.1} MB RGBA)",
             t0.elapsed(),
+            desktop.monitor_count,
             w,
             h,
             rgba.len() as f64 / 1_048_576.0
@@ -540,17 +543,19 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
             img_w: w,
             img_h: h,
             scale_factor,
-            monitor_x: monitor.x,
-            monitor_y: monitor.y,
-            monitor_width: monitor.width,
-            monitor_height: monitor.height,
+            monitor_x: desktop.x,
+            monitor_y: desktop.y,
+            monitor_width: desktop.width,
+            monitor_height: desktop.height,
             preview_image_base64: None,
             preview_image_mime: String::new(),
             restore_main_window,
         });
 
         let (event_tx, event_rx) = mpsc::channel::<CaptureEvent>();
-        capture_window::start_capture(rgba.clone(), w, h, scale_factor, monitor.x, monitor.y, event_tx);
+        capture_window::start_capture(
+            rgba.clone(), w, h, scale_factor, desktop.x, desktop.y, desktop.monitor_count, event_tx,
+        );
         tracing::info!("[PERF] start_capture_native: {:?}", t0.elapsed());
 
         let state_clone = state.clone();

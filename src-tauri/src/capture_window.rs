@@ -3,7 +3,7 @@ use std::sync::{mpsc, Arc, OnceLock};
 
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalPosition;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, Touch, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Fullscreen, Window, WindowId, WindowLevel};
@@ -18,8 +18,9 @@ pub enum CaptureCommand {
         img_w: u32,
         img_h: u32,
         scale_factor: f64,
-        monitor_x: i32,
-        monitor_y: i32,
+        desktop_x: i32,
+        desktop_y: i32,
+        monitor_count: usize,
         event_tx: mpsc::Sender<CaptureEvent>,
     },
     /// Display a translated result image over the selection area.
@@ -98,8 +99,9 @@ pub fn start_capture(
     img_w: u32,
     img_h: u32,
     scale_factor: f64,
-    monitor_x: i32,
-    monitor_y: i32,
+    desktop_x: i32,
+    desktop_y: i32,
+    monitor_count: usize,
     event_tx: mpsc::Sender<CaptureEvent>,
 ) {
     let _ = capture_proxy().send_event(CaptureCommand::StartCapture {
@@ -107,8 +109,9 @@ pub fn start_capture(
         img_w,
         img_h,
         scale_factor,
-        monitor_x,
-        monitor_y,
+        desktop_x,
+        desktop_y,
+        monitor_count,
         event_tx,
     });
 }
@@ -187,28 +190,35 @@ impl CaptureHandler {
         img_w: u32,
         img_h: u32,
         scale_factor: f64,
-        monitor_x: i32,
-        monitor_y: i32,
+        desktop_x: i32,
+        desktop_y: i32,
+        monitor_count: usize,
         event_tx: mpsc::Sender<CaptureEvent>,
     ) {
-        // Find the monitor handle matching the given coordinates
-        let target_monitor = event_loop.available_monitors().find(|m| {
-            let pos = m.position();
-            pos.x == monitor_x && pos.y == monitor_y
-        });
-
-        let fullscreen = match target_monitor {
-            Some(m) => Fullscreen::Borderless(Some(m)),
-            None => Fullscreen::Borderless(None),
-        };
-
         let attrs = Window::default_attributes()
             .with_title("Capture")
             .with_decorations(false)
             .with_resizable(false)
-            .with_fullscreen(Some(fullscreen))
             .with_window_level(WindowLevel::AlwaysOnTop)
             .with_visible(false);
+
+        // A single borderless window over the virtual desktop keeps a drag
+        // active when the pointer crosses from one monitor to another.
+        let attrs = if monitor_count == 1 {
+            let target_monitor = event_loop.available_monitors().find(|m| {
+                let pos = m.position();
+                pos.x == desktop_x && pos.y == desktop_y
+            });
+            let fullscreen = match target_monitor {
+                Some(m) => Fullscreen::Borderless(Some(m)),
+                None => Fullscreen::Borderless(None),
+            };
+            attrs.with_fullscreen(Some(fullscreen))
+        } else {
+            attrs
+                .with_position(PhysicalPosition::new(desktop_x, desktop_y))
+                .with_inner_size(PhysicalSize::new(img_w, img_h))
+        };
 
         #[cfg(target_os = "macos")]
         let attrs = {
@@ -395,13 +405,14 @@ impl ApplicationHandler<CaptureCommand> for CaptureHandler {
                 img_w,
                 img_h,
                 scale_factor,
-                monitor_x,
-                monitor_y,
+                desktop_x,
+                desktop_y,
+                monitor_count,
                 event_tx,
             } => {
                 // Always close any previous window before opening a new one.
                 self.close_window();
-                self.open_window(event_loop, rgba, img_w, img_h, scale_factor, monitor_x, monitor_y, event_tx);
+                self.open_window(event_loop, rgba, img_w, img_h, scale_factor, desktop_x, desktop_y, monitor_count, event_tx);
             }
 
             CaptureCommand::ShowResult {

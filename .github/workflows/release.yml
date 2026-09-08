@@ -49,6 +49,23 @@ jobs:
       - name: Build
         run: cargo tauri build --target ${{ matrix.target }}
 
+      - name: Package portable Windows ZIP
+        if: matrix.label == 'windows-x64'
+        shell: pwsh
+        run: |
+          $portableDir = Join-Path $env:RUNNER_TEMP 'Glance-portable'
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+          Copy-Item 'src-tauri/target/${{ matrix.target }}/release/glance.exe' (Join-Path $portableDir 'Glance.exe')
+          @'
+          Glance Windows 便携版
+
+          无需安装，解压后直接运行 Glance.exe。
+          Windows 10/11 通常已内置 Microsoft Edge WebView2 Runtime；若启动失败，
+          请安装 Evergreen WebView2 Runtime 后重试：
+          https://developer.microsoft.com/microsoft-edge/webview2/
+          '@ | Set-Content -Encoding utf8 (Join-Path $portableDir 'README.txt')
+          Compress-Archive -Path (Join-Path $portableDir '*') -DestinationPath 'Glance-windows-x64-portable.zip' -Force
+
       - name: Force Ad-hoc signing (macOS only)
         if: startsWith(matrix.platform, 'macos')
         run: |
@@ -65,6 +82,7 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            Glance-windows-x64-portable.zip
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             glance-${{ matrix.label }}.zip
             src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app

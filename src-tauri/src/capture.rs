@@ -33,6 +33,17 @@ pub struct CursorMonitorResult {
     pub monitor: MonitorInfo,
 }
 
+/// A single RGBA snapshot of the complete virtual desktop.
+#[cfg(not(target_os = "macos"))]
+pub struct VirtualDesktopCapture {
+    pub rgba: Vec<u8>,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub monitor_count: usize,
+}
+
 #[cfg(target_os = "macos")]
 pub struct InteractiveCaptureImage {
     pub png_bytes: Vec<u8>,
@@ -349,6 +360,155 @@ pub fn capture_screen_with_preview(display_id: u32) -> AppResult<CapturedScreenI
 #[cfg(target_os = "macos")]
 pub fn capture_interactive_region() -> AppResult<Option<InteractiveCaptureImage>> {
     capture_interactive_region_macos()
+}
+
+/// Capture every display and combine the snapshots into one virtual desktop.
+/// Window coordinates and selection coordinates use physical pixels.
+#[cfg(not(target_os = "macos"))]
+pub fn capture_virtual_desktop_to_memory() -> AppResult<VirtualDesktopCapture> {
+    let screens = CaptureScreen::all().map_err(|e| AppError::Capture(e.to_string()))?;
+    if screens.is_empty() {
+        return Err(AppError::Capture("no monitors found".into()));
+    }
+
+    let mut snapshots = Vec::with_capacity(screens.len());
+    for screen in screens {
+        let info = &screen.display_info;
+        // `display-info` exposes logical geometry, while `screenshots` returns
+        // physical RGBA pixels after multiplying by this display's scale factor.
+        // Convert both position and extent before composing mixed-DPI displays.
+        let (x, y, expected_width, expected_height) = physical_display_geometry(
+            info.x,
+            info.y,
+            info.width,
+            info.height,
+            info.scale_factor,
+        )?;
+        let (rgba, width, height) = capture_screen_to_memory(screen)?;
+        if width != expected_width || height != expected_height {
+            return Err(AppError::Capture(format!(
+                "display capture size {width}x{height} does not match physical geometry {expected_width}x{expected_height}"
+            )));
+        }
+        snapshots.push((x, y, width, height, rgba));
+    }
+
+    let monitor_bounds = snapshots
+        .iter()
+        .map(|(x, y, width, height, _)| (*x, *y, *width, *height))
+        .collect::<Vec<_>>();
+    let (desktop_x, desktop_y, desktop_width, desktop_height) =
+        virtual_desktop_bounds(&monitor_bounds)?;
+    let pixel_count = (desktop_width as usize)
+        .checked_mul(desktop_height as usize)
+        .ok_or_else(|| AppError::Capture("virtual desktop is too large".into()))?;
+    let byte_count = pixel_count
+        .checked_mul(4)
+        .ok_or_else(|| AppError::Capture("virtual desktop is too large".into()))?;
+    let mut rgba = vec![0; byte_count];
+    let monitor_count = snapshots.len();
+
+    for (x, y, width, height, pixels) in snapshots {
+        let offset_x = (x - desktop_x) as usize;
+        let offset_y = (y - desktop_y) as usize;
+        let row_bytes = (width as usize)
+            .checked_mul(4)
+            .ok_or_else(|| AppError::Capture("display row is too large".into()))?;
+        for row in 0..height as usize {
+            let src_start = row * row_bytes;
+            let dst_start = ((offset_y + row) * desktop_width as usize + offset_x) * 4;
+            rgba[dst_start..dst_start + row_bytes]
+                .copy_from_slice(&pixels[src_start..src_start + row_bytes]);
+        }
+    }
+
+    Ok(VirtualDesktopCapture {
+        rgba,
+        x: desktop_x,
+        y: desktop_y,
+        width: desktop_width,
+        height: desktop_height,
+        monitor_count,
+    })
+}
+
+fn physical_display_geometry(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f32,
+) -> AppResult<(i32, i32, u32, u32)> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Err(AppError::Capture("display scale factor is invalid".into()));
+    }
+
+    // Match `screenshots::capture_screen`, which applies the factor with an
+    // f32 multiplication before converting to an integer pixel count.
+    let scale_coordinate = |value: i32| -> AppResult<i32> {
+        let scaled = value as f32 * scale_factor;
+        if !scaled.is_finite() || scaled < i32::MIN as f32 || scaled > i32::MAX as f32 {
+            return Err(AppError::Capture("physical display coordinate is invalid".into()));
+        }
+        Ok(scaled as i32)
+    };
+    let scale_dimension = |value: u32| -> AppResult<u32> {
+        let scaled = value as f32 * scale_factor;
+        if !scaled.is_finite() || scaled < 0.0 || scaled > u32::MAX as f32 {
+            return Err(AppError::Capture("physical display dimension is invalid".into()));
+        }
+        Ok(scaled as u32)
+    };
+
+    Ok((
+        scale_coordinate(x)?,
+        scale_coordinate(y)?,
+        scale_dimension(width)?,
+        scale_dimension(height)?,
+    ))
+}
+
+fn virtual_desktop_bounds(monitors: &[(i32, i32, u32, u32)]) -> AppResult<(i32, i32, u32, u32)> {
+    let min_x = monitors.iter().map(|(x, _, _, _)| *x as i64).min()
+        .ok_or_else(|| AppError::Capture("no monitors found".into()))?;
+    let min_y = monitors.iter().map(|(_, y, _, _)| *y as i64).min()
+        .ok_or_else(|| AppError::Capture("no monitors found".into()))?;
+    let max_x = monitors.iter().map(|(x, _, width, _)| *x as i64 + *width as i64).max()
+        .ok_or_else(|| AppError::Capture("no monitors found".into()))?;
+    let max_y = monitors.iter().map(|(_, y, _, height)| *y as i64 + *height as i64).max()
+        .ok_or_else(|| AppError::Capture("no monitors found".into()))?;
+
+    let width = u32::try_from(max_x - min_x)
+        .map_err(|_| AppError::Capture("virtual desktop width is invalid".into()))?;
+    let height = u32::try_from(max_y - min_y)
+        .map_err(|_| AppError::Capture("virtual desktop height is invalid".into()))?;
+    Ok((
+        i32::try_from(min_x).map_err(|_| AppError::Capture("virtual desktop x is invalid".into()))?,
+        i32::try_from(min_y).map_err(|_| AppError::Capture("virtual desktop y is invalid".into()))?,
+        width,
+        height,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{physical_display_geometry, virtual_desktop_bounds};
+
+    #[test]
+    fn display_geometry_is_converted_to_physical_pixels() {
+        assert_eq!(
+            physical_display_geometry(-1280, 0, 1280, 1024, 1.5).unwrap(),
+            (-1920, 0, 1920, 1536)
+        );
+    }
+
+    #[test]
+    fn bounds_cover_negative_and_vertical_displays() {
+        assert_eq!(
+            virtual_desktop_bounds(&[(0, 0, 1920, 1080), (-1280, 0, 1280, 1024), (0, -900, 1600, 900)]).unwrap(),
+            (-1280, -900, 3200, 1980)
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]

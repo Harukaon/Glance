@@ -84,6 +84,10 @@ cargo tauri build
 
 产物在 `src-tauri/target/release/bundle/` 下。
 
+## Windows 便携版
+
+在 GitHub Release 下载 `Glance-windows-x64-portable.zip`，解压后直接运行 `Glance.exe`，无需安装。Windows 10/11 通常已经内置 Microsoft Edge WebView2 Runtime；若程序无法启动，请安装 [Evergreen WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) 后重试。
+
 ## macOS 安装说明
 
 由于 Glance 尚未启用付费开发者证书签名（不走 App Store），在 macOS 上首次下载安装后会触发系统安全拦截。
