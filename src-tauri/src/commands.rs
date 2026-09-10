@@ -408,7 +408,10 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
     #[cfg(target_os = "macos")]
     capture_timeline(&t0, "begin_capture_impl entered");
 
-    let restore_main_window = hide_main_window_before_capture(app);
+    // Hide the main window for a clean capture, but do not bring it back
+    // afterward — screenshot results live on the overlay; reopen from tray.
+    let _ = hide_main_window_before_capture(app);
+    let restore_main_window = false;
 
     #[cfg(target_os = "macos")]
     capture_timeline(&t0, "main window hidden");
