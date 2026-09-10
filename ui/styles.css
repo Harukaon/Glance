@@ -502,6 +502,31 @@ body.capture-preparing *::after {
   font-weight: 400;
   color: var(--text-sub);
 }
+/* 更新行：当前版本 + 一个按钮（查到新版时变成「打开下载页」）。 */
+.update-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.update-btn {
+  background: none;
+  border: 1px solid var(--block-bg);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-main);
+  padding: 3px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.update-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.update-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .settings-textarea {
   width: 100%;
   margin-left: 0;

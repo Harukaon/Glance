@@ -17,7 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::{
     CaptureMode, CaptureRect, CaptureTranslatePayload, CaptureViewPayload, HistoryQuery,
     OcrTextResult, OverlayPayload, SelectionPayload, TextTranslationResult,
-    TranslationHistoryItem, TranslatorSettings,
+    TranslationHistoryItem, TranslatorSettings, UpdateInfo,
 };
 use crate::capture_hotkey::{decide_capture_hotkey_action, CaptureHotkeyAction};
 use crate::popup_shortcut::{decide_popup_shortcut_action, PopupShortcutAction};
@@ -218,6 +218,178 @@ pub async fn translate_text(
             proxy_url.as_deref(),
         )
         .await
+}
+
+// ── Update check ────────────────────────────────────────────────────────────
+
+/// 上游 Releases 的最新版本。查不到（离线 / 403 限流 / 非 2xx）就回 None，
+/// 前端按「这次查不了」处理，不把它当错误弹出来。
+const RELEASE_API: &str = "https://api.github.com/repos/Harukaon/Glance/releases/latest";
+/// 要打开的地址是编译期常量：`open_release_page` 不收参数，前端能影响的只有
+/// 「要不要打开」这一件事，响应里的 html_url 也不参与拼装（仓库改名或迁移会让
+/// 那条静默失效，但把外部字符串交给进程去打开这件事本身就不该做）。
+const RELEASE_PAGE_URL: &str = "https://github.com/Harukaon/Glance/releases/latest";
+/// 连不上要早点失败，但整次请求给宽一点：github.com 在国内往往要过代理，
+/// 冷启动时 DNS + TLS 加代理握手十来秒是常见的，卡 10s 会把「能查到」误判成查不到。
+const UPDATE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+const UPDATE_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// 分段读超时：整体 20s 是兜底，代理半死不活时靠它早点放弃，别让连接挂着不放。
+const UPDATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const UPDATE_NOTES_LIMIT: usize = 600;
+const UPDATE_TAG_MAX_LEN: usize = 64;
+
+/// 把 API 返回的 tag_name 收敛成可比较的版本号：只放行 `v?数字.数字[.数字…]`
+/// 后面跟一个 `-预发布` 或 `+构建元数据` 的形状，后缀字符集限 `[0-9A-Za-z.-]`。
+/// 这个字符集里没有任何会被 shell 或 URL 解析器当断句的字符（空格 & | < > ^ " % 反引号
+/// 都不在内），所以校验过的 tag 之外不存在别的东西能进入「打开」那条路。
+/// 不合规一律 None（当这次查不了，不猜）。
+fn normalize_release_tag(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let body = trimmed
+        .strip_prefix('v')
+        .or_else(|| trimmed.strip_prefix('V'))
+        .unwrap_or(trimmed);
+    if body.is_empty() || body.len() > UPDATE_TAG_MAX_LEN {
+        return None;
+    }
+    // 号段：至少两段纯数字（0.2 这种历史上出现过），且不能有空段。
+    let (head, suffix) = match body.find(['-', '+']) {
+        Some(index) => (&body[..index], Some(&body[index..])),
+        None => (body, None),
+    };
+    let segments: Vec<&str> = head.split('.').collect();
+    if segments.len() < 2 || segments.iter().any(|s| s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    // 后缀：以 - 或 + 开头，之后只允许字母数字和 . -
+    if let Some(suffix) = suffix {
+        if suffix.len() < 2
+            || !suffix
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'+')
+        {
+            return None;
+        }
+    }
+    Some(body.to_ascii_lowercase())
+}
+
+/// 查一次 GitHub 上的最新 Release。代理跟翻译请求走同一套设置
+/// （ProxyMode::System / Custom），国内直连不上 GitHub 的用户不至于卡在这里。
+#[tauri::command]
+pub async fn check_update(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+) -> AppResult<Option<UpdateInfo>> {
+    let proxy_url = {
+        let settings = state.settings.read().await;
+        match settings.proxy_mode {
+            crate::models::ProxyMode::None => None,
+            crate::models::ProxyMode::System => crate::builtin_translate::system_proxy_url(),
+            crate::models::ProxyMode::Custom => {
+                crate::builtin_translate::normalize_proxy(&settings.custom_proxy)
+            }
+        }
+    };
+
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(UPDATE_CONNECT_TIMEOUT)
+        .timeout(UPDATE_CHECK_TIMEOUT)
+        .read_timeout(UPDATE_READ_TIMEOUT);
+    builder = match proxy_url {
+        Some(url) => match reqwest::Proxy::all(&url) {
+            Ok(proxy) => builder.proxy(proxy),
+            // 代理串合不成一个合法 proxy 就当这次查不了：不回退成直连，
+            // 免得给用户「走了代理」的错觉，也免得国内直连必挂时白等一轮超时。
+            Err(_) => return Ok(None),
+        },
+        None => builder.no_proxy(),
+    };
+    // 构建失败就放弃这一次。不能回退到 `Client::new()`：那是个没有 connect/read/整体
+    // 超时、也不带代理的客户端，上面那三个时间上限会全部失效；而且它内部是
+    // `ClientBuilder::new().build().expect("Client::new()")`，真到了建不起来的时候
+    // 这里会从「降级」变成 panic。
+    let client = match builder.build() {
+        Ok(client) => client,
+        Err(_) => return Ok(None),
+    };
+
+    let response = match client
+        .get(RELEASE_API)
+        // GitHub 的 API 没有 User-Agent 会直接 403。
+        .header("User-Agent", "Glance")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return Ok(None),
+    };
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    let payload: serde_json::Value = match response.json().await {
+        Ok(payload) => payload,
+        Err(_) => return Ok(None),
+    };
+
+    // tag_name 是唯一从外面进来的字符串，先过白名单；地址不用它拼（见 RELEASE_PAGE_URL）。
+    let latest = match normalize_release_tag(
+        payload.get("tag_name").and_then(|value| value.as_str()).unwrap_or(""),
+    ) {
+        Some(tag) => tag,
+        None => return Ok(None),
+    };
+    let notes = payload
+        .get("body")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .chars()
+        .take(UPDATE_NOTES_LIMIT)
+        .collect::<String>();
+    let published_at = payload
+        .get("published_at")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Ok(Some(UpdateInfo {
+        latest,
+        current: app.package_info().version.to_string(),
+        notes,
+        published_at,
+    }))
+}
+
+/// 用系统默认浏览器打开本仓库的发布页。不收任何参数：要打开的是编译期常量，
+/// 前端与 API 响应都改不了它。
+#[tauri::command]
+pub async fn open_release_page() -> AppResult<()> {
+    open_in_browser(RELEASE_PAGE_URL)
+        .map_err(|err| AppError::Api(format!("failed to open the release page: {err}")))
+}
+
+/// 打开一个 URL。三个平台都不经过 shell：Windows 上原先那套 `cmd /C start "" <url>`
+/// 的引号是 cmd 自己的规则，Rust 的参数转义是按 MSVC argv 做的，两套对不上——
+/// 不含空格的参数 Rust 根本不加引号，`&` `|` `>` `%VAR%` 会被 cmd 当断句和展开；
+/// 带引号的参数里再塞一个 `"` 还能把引号状态翻回来。走 rundll32 的
+/// FileProtocolHandler 是同一个「按默认程序打开」入口，但没有 shell 解析器这一步。
+fn open_in_browser(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", url])
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).spawn().map(|_| ())
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open").arg(url).spawn().map(|_| ())
+    }
 }
 
 // ── Window ──────────────────────────────────────────────────────────────────
@@ -1313,4 +1485,56 @@ fn create_overlay_window(
     window.show()?;
     window.set_focus()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod update_tag_tests {
+    use super::normalize_release_tag;
+
+    #[test]
+    fn accepts_ordinary_tag_shapes() {
+        assert_eq!(normalize_release_tag("v0.2.30").as_deref(), Some("0.2.30"));
+        assert_eq!(normalize_release_tag("0.2.30").as_deref(), Some("0.2.30"));
+        assert_eq!(normalize_release_tag("  v0.2.30  ").as_deref(), Some("0.2.30"));
+        assert_eq!(
+            normalize_release_tag("v0.2.31-beta.2").as_deref(),
+            Some("0.2.31-beta.2")
+        );
+        assert_eq!(
+            normalize_release_tag("v1.0.0-alpha+001").as_deref(),
+            Some("1.0.0-alpha+001")
+        );
+        // 两段号历史上出现过，别当解析失败。
+        assert_eq!(normalize_release_tag("v0.2").as_deref(), Some("0.2"));
+    }
+
+    #[test]
+    fn rejects_shell_and_url_metacharacters() {
+        // 这一组是「前缀校验拦不住」的形状：都长得像 tag，但带元字符。
+        for bad in [
+            "v0.2.31&echo.pwned",
+            "v0.2.31|calc",
+            "v0.2.31>out.txt",
+            "v0.2.31^&x",
+            "v0.2.31%USERPROFILE%",
+            "v0.2.31\" & start cmd",
+            "v0.2.31 /c calc",
+            "v0.2.31`id`",
+            "v0.2.31\nrc.2",
+            "https://evil.example/x",
+            "../../etc/passwd",
+        ] {
+            assert_eq!(normalize_release_tag(bad), None, "不该放行 {:?}", bad);
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_tags() {
+        for bad in [
+            "", "   ", "v", "v.", "v..", "0..2", "0.2.", "0.2.x", "0.2.31-", "0.2.31+",
+            "nightly", "0.2.31!", "0.2.31_beta", "9".repeat(80).as_str(),
+        ] {
+            assert_eq!(normalize_release_tag(bad), None, "should reject {:?}", bad);
+        }
+    }
 }
