@@ -520,33 +520,62 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
         );
 
         let scale_factor = monitor.scale_factor;
-        // Capture every display into one virtual desktop so one selection can
-        // cross monitor boundaries without restarting the screenshot flow.
-        let desktop = tokio::task::spawn_blocking(capture::capture_virtual_desktop_to_memory)
+
+        // Windows: a single softbuffer HWND spanning the mixed-DPI virtual
+        // desktop paints black on this machine. Capture only the monitor under
+        // the cursor and use borderless fullscreen (monitor_count=1).
+        #[cfg(target_os = "windows")]
+        let (rgba, w, h, origin_x, origin_y, monitor_count) = {
+            let screen = result.screen;
+            let (rgba, w, h) = tokio::task::spawn_blocking(move || {
+                capture::capture_screen_to_memory(screen)
+            })
             .await
             .map_err(|e| AppError::Capture(format!("capture task failed: {e}")))??;
-        let rgba = desktop.rgba;
-        let w = desktop.width;
-        let h = desktop.height;
+            tracing::info!(
+                "[PERF] capture_cursor_monitor: {:?} | {}x{} ({:.1} MB RGBA)",
+                t0.elapsed(),
+                w,
+                h,
+                rgba.len() as f64 / 1_048_576.0
+            );
+            (rgba, w, h, monitor.x, monitor.y, 1usize)
+        };
 
-        tracing::info!(
-            "[PERF] capture_virtual_desktop: {:?} | {} displays, {}x{} ({:.1} MB RGBA)",
-            t0.elapsed(),
-            desktop.monitor_count,
-            w,
-            h,
-            rgba.len() as f64 / 1_048_576.0
-        );
+        #[cfg(not(target_os = "windows"))]
+        let (rgba, w, h, origin_x, origin_y, monitor_count) = {
+            // Capture every display into one virtual desktop so one selection can
+            // cross monitor boundaries without restarting the screenshot flow.
+            let desktop = tokio::task::spawn_blocking(capture::capture_virtual_desktop_to_memory)
+                .await
+                .map_err(|e| AppError::Capture(format!("capture task failed: {e}")))??;
+            tracing::info!(
+                "[PERF] capture_virtual_desktop: {:?} | {} displays, {}x{} ({:.1} MB RGBA)",
+                t0.elapsed(),
+                desktop.monitor_count,
+                desktop.width,
+                desktop.height,
+                desktop.rgba.len() as f64 / 1_048_576.0
+            );
+            (
+                desktop.rgba,
+                desktop.width,
+                desktop.height,
+                desktop.x,
+                desktop.y,
+                desktop.monitor_count,
+            )
+        };
 
         *state.capture_session.write().await = Some(crate::app_state::ActiveCaptureSession {
             rgba: rgba.clone(),
             img_w: w,
             img_h: h,
             scale_factor,
-            monitor_x: desktop.x,
-            monitor_y: desktop.y,
-            monitor_width: desktop.width,
-            monitor_height: desktop.height,
+            monitor_x: origin_x,
+            monitor_y: origin_y,
+            monitor_width: w,
+            monitor_height: h,
             preview_image_base64: None,
             preview_image_mime: String::new(),
             restore_main_window,
@@ -554,7 +583,14 @@ async fn begin_capture_impl(app: &AppHandle, state: &SharedState) -> AppResult<(
 
         let (event_tx, event_rx) = mpsc::channel::<CaptureEvent>();
         capture_window::start_capture(
-            rgba.clone(), w, h, scale_factor, desktop.x, desktop.y, desktop.monitor_count, event_tx,
+            rgba.clone(),
+            w,
+            h,
+            scale_factor,
+            origin_x,
+            origin_y,
+            monitor_count,
+            event_tx,
         );
         tracing::info!("[PERF] start_capture_native: {:?}", t0.elapsed());
 
