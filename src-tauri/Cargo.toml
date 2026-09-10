@@ -38,6 +38,7 @@ objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSEvent"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.55"
+window-vibrancy = "0.6"
 
 [features]
 default = ["custom-protocol"]

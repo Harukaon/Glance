@@ -192,6 +192,14 @@ fn main() {
             // ── Intercept window close → hide to tray ────────────────────
             let main_window = app.get_webview_window("main").unwrap();
 
+            // DeskBox-like frosted glass: OS acrylic behind a transparent WebView.
+            #[cfg(target_os = "windows")]
+            {
+                use window_vibrancy::apply_acrylic;
+                // Soft light acrylic tint (approx. weather-widget glass).
+                let _ = apply_acrylic(&main_window, Some((236, 240, 248, 180)));
+            }
+
             // Silent startup: when launched via OS autostart the app is run with
             // `--minimized`, so keep the main window hidden (tray only). The window
             // is created hidden (see tauri.conf.json), so a normal launch must

@@ -1,16 +1,30 @@
 :root {
-  --bg-app: #F3F4F6;
-  --block-bg: #FFFFFF;
+  /* DeskBox / weather-widget inspired frosted glass */
+  --bg-app: transparent;
+  --glass-fill: rgba(255, 255, 255, 0.42);
+  --glass-fill-strong: rgba(255, 255, 255, 0.58);
+  --glass-fill-soft: rgba(255, 255, 255, 0.28);
+  --glass-border: rgba(120, 160, 255, 0.38);
+  --glass-border-soft: rgba(255, 255, 255, 0.55);
+  --glass-highlight: rgba(255, 255, 255, 0.65);
+  --block-bg: rgba(255, 255, 255, 0.48);
   --accent: #FFCC00;
-  --text-main: #111827;
-  --text-sub: #6B7280;
-  --radius-xl: 20px;
+  --accent-glow: rgba(255, 204, 0, 0.35);
+  --text-main: #1c1c1e;
+  --text-sub: #5c6370;
+  --radius-xl: 18px;
   --radius-md: 14px;
   --radius-sm: 8px;
+  --shadow-glass: 0 8px 32px rgba(30, 50, 90, 0.12), inset 0 1px 0 var(--glass-highlight);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body, #app { width: 100%; height: 100%; background: var(--bg-app); color: var(--text-main); }
+html, body, #app {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: var(--text-main);
+}
 button, select, input, textarea { font: inherit; }
 
 html.capture-preparing,
@@ -32,11 +46,19 @@ body.capture-preparing *::after {
   transition: none !important;
 }
 
-/* ── Bento container ── */
+/* ── Bento container (frosted shell) ── */
 .bento-app {
   width: 100%;
   height: 100%;
-  background: var(--bg-app);
+  background:
+    radial-gradient(120% 80% at 100% 0%, rgba(140, 170, 255, 0.22), transparent 55%),
+    radial-gradient(90% 70% at 0% 100%, rgba(255, 255, 255, 0.35), transparent 50%),
+    var(--glass-fill);
+  -webkit-backdrop-filter: blur(28px) saturate(1.35);
+  backdrop-filter: blur(28px) saturate(1.35);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-glass);
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -46,9 +68,12 @@ body.capture-preparing *::after {
 /* ── Generic block card ── */
 .block {
   background: var(--block-bg);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  backdrop-filter: blur(16px) saturate(1.2);
+  border: 1px solid var(--glass-border-soft);
   border-radius: var(--radius-xl);
   padding: 16px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  box-shadow: 0 4px 18px rgba(30, 50, 90, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 /* ── Header: language + toggle ── */
@@ -68,6 +93,7 @@ body.capture-preparing *::after {
   font-size: 15px;
   font-weight: 700;
   color: var(--text-main);
+  letter-spacing: 0.01em;
 }
 .header-right {
   display: flex;
@@ -100,9 +126,9 @@ body.capture-preparing *::after {
   padding: 2px 4px;
   border-radius: 6px;
 }
-.lang-pill select:hover { background: rgba(0,0,0,0.04); }
+.lang-pill select:hover { background: rgba(255,255,255,0.35); }
 .lang-swap {
-  color: #A1A1AA;
+  color: #8b93a3;
   font-size: 14px;
   line-height: 1;
   background: none;
@@ -112,7 +138,7 @@ body.capture-preparing *::after {
   border-radius: 6px;
 }
 .lang-swap:hover {
-  background: rgba(0,0,0,0.04);
+  background: rgba(255,255,255,0.35);
   color: var(--text-main);
 }
 
@@ -120,11 +146,11 @@ body.capture-preparing *::after {
 .toggle {
   width: 32px;
   height: 18px;
-  background: #E4E4E7;
+  background: rgba(120, 130, 150, 0.28);
   border-radius: 20px;
   position: relative;
   cursor: pointer;
-  border: none;
+  border: 1px solid rgba(255,255,255,0.35);
   padding: 0;
   transition: background 0.2s;
   flex-shrink: 0;
@@ -138,17 +164,18 @@ body.capture-preparing *::after {
   height: 14px;
   background: white;
   border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
   transition: transform 0.2s, background 0.2s;
 }
-.toggle.on { background: var(--accent); }
+.toggle.on { background: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
 .toggle.on::after { transform: translateX(14px); }
 
 /* Engine switcher */
 .engine-switcher {
   display: flex;
   gap: 0;
-  background: #F4F4F5;
+  background: var(--glass-fill-soft);
+  border: 1px solid rgba(255,255,255,0.4);
   border-radius: 8px;
   padding: 2px;
 }
@@ -166,29 +193,30 @@ body.capture-preparing *::after {
 }
 .engine-btn:hover { color: var(--text-main); }
 .engine-btn.active {
-  background: var(--block-bg);
+  background: rgba(255,255,255,0.72);
   color: var(--text-main);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  box-shadow: 0 1px 3px rgba(30,50,90,0.08);
 }
 
 /* Settings panel */
 .settings-panel {
   background: var(--block-bg);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  backdrop-filter: blur(16px) saturate(1.2);
+  border: 1px solid var(--glass-border-soft);
   border-radius: var(--radius-xl);
   padding: 14px 16px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  box-shadow: 0 4px 18px rgba(30, 50, 90, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.7);
   flex: 1 1 auto;
   min-height: 0;
-  /* Scroll with the wheel when content overflows, but never show a scrollbar
-     (its appearance/disappearance during the resize caused a flash). */
   overflow-y: auto;
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* old Edge */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 .settings-panel::-webkit-scrollbar {
   width: 0;
   height: 0;
-  display: none; /* Chromium / WebView2 */
+  display: none;
 }
 .settings-section {
   display: flex;
@@ -216,7 +244,7 @@ body.capture-preparing *::after {
   border-radius: 6px;
   transition: all 0.15s;
 }
-.settings-btn:hover { color: var(--text-main); background: rgba(0,0,0,0.04); }
+.settings-btn:hover { color: var(--text-main); background: rgba(255,255,255,0.4); }
 .settings-btn.open { color: var(--accent); }
 
 .pin-btn {
@@ -231,32 +259,23 @@ body.capture-preparing *::after {
   padding: 4px;
   border-radius: 6px;
   transition: all 0.15s;
-  /* 斜过来 = 图钉被拔起来了（未置顶）；摆正 + 填充 = 钉住（置顶）。
-     图标本身画成正立的，所以这里的角度就是用户实际看到的角度。 */
   transform: rotate(-45deg);
 }
 .pin-btn svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
-.pin-btn:hover { color: var(--text-main); background: rgba(0,0,0,0.04); }
+.pin-btn:hover { color: var(--text-main); background: rgba(255,255,255,0.4); }
 .pin-btn.on { color: var(--accent); transform: rotate(0deg); }
 .pin-btn.on svg { fill: currentColor; stroke: none; }
 
 /* ── Collapse: 窗口拉到只剩横栏时先收掉输入/输出 ── */
-/* 横栏本身 flex-shrink:0，最小高度就是它 + 上下 padding；正文一矮到没法用就
-   整个收起来，而不是让用户拖不动。设置面板展开时不收（那时窗口会被撑开）。 */
 @media (max-height: 176px) {
   .bento-app:not(.settings-open) .text-block { display: none; }
 }
-/* 横栏里的东西在窄窗口下按重要性依次让位：标题、按钮文字。 */
 @media (max-width: 440px) {
   .header-block .app-title { display: none; }
   .header-block .capture-btn .btn-label { display: none; }
 }
 
 /* ── Text block: left input + right output ── */
-/* The translation area fills the window when settings are collapsed. When the
-   settings panel is visible (window grows), its height is capped so it stays
-   the same size and the extra vertical space is absorbed by the settings
-   panel below. */
 .text-block {
   display: flex;
   flex-direction: row;
@@ -277,7 +296,7 @@ body.capture-preparing *::after {
 }
 .input-col {
   padding-right: 10px;
-  border-right: 1px solid #F0F0F2;
+  border-right: 1px solid rgba(120, 140, 180, 0.18);
 }
 .output-col {
   padding-left: 10px;
@@ -309,7 +328,7 @@ body.capture-preparing *::after {
   padding-right: 8px;
   overflow-y: auto;
 }
-.input-area::placeholder { color: #D4D4D8; }
+.input-area::placeholder { color: rgba(92, 99, 112, 0.55); }
 .meta-info {
   display: flex;
   justify-content: space-between;
@@ -321,7 +340,8 @@ body.capture-preparing *::after {
   gap: 4px;
 }
 .detect-tag {
-  background: #F4F4F5;
+  background: rgba(255,255,255,0.45);
+  border: 1px solid rgba(255,255,255,0.5);
   padding: 2px 6px;
   border-radius: 6px;
   font-weight: 500;
@@ -347,7 +367,6 @@ body.capture-preparing *::after {
   overflow-y: auto;
 }
 
-/* Ensure output textarea also fills available space like input textarea */
 .output-area {
   flex: 1;
   min-height: 0;
@@ -374,7 +393,8 @@ body.capture-preparing *::after {
   gap: 6px;
 }
 .alt-tag {
-  background: #F4F4F5;
+  background: rgba(255,255,255,0.45);
+  border: 1px solid rgba(255,255,255,0.5);
   padding: 3px 8px;
   border-radius: 6px;
   font-size: 12px;
@@ -399,7 +419,7 @@ body.capture-preparing *::after {
   gap: 4px;
   line-height: 1;
 }
-.capture-btn:hover { color: var(--text-main); background: rgba(0,0,0,0.04); }
+.capture-btn:hover { color: var(--text-main); background: rgba(255,255,255,0.4); }
 .capture-btn:disabled { opacity: 0.4; cursor: default; }
 .capture-shortcut {
   display: inline-flex;
@@ -409,7 +429,8 @@ body.capture-preparing *::after {
   color: var(--text-sub);
 }
 .capture-shortcut .shortcut-key {
-  background: var(--bg-app);
+  background: rgba(255,255,255,0.5);
+  border: 1px solid rgba(255,255,255,0.55);
   color: var(--text-main);
   font-family: monospace;
   font-size: 10px;
@@ -420,19 +441,20 @@ body.capture-preparing *::after {
 /* ── Shortcut row ── */
 .shortcut-row {
   font-size: 12px;
-  color: #A1A1AA;
+  color: #8b93a3;
   display: flex;
   align-items: center;
   gap: 4px;
   cursor: pointer;
   user-select: none;
 }
-.shortcut-row:hover { color: #D4D4D8; }
+.shortcut-row:hover { color: var(--text-main); }
 .shortcut-key {
-  background: rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(255,255,255,0.5);
   padding: 2px 6px;
   border-radius: 4px;
-  color: white;
+  color: var(--text-main);
   font-family: monospace;
   font-size: 12px;
 }
@@ -442,16 +464,17 @@ body.capture-preparing *::after {
   color: #71717A;
   margin-left: 6px;
 }
-.shortcut-row:hover .shortcut-hint { color: #D4D4D8; }
+.shortcut-row:hover .shortcut-hint { color: var(--text-sub); }
 .shortcut-row.recording .shortcut-key {
-  background: rgba(255,204,0,0.2);
+  background: rgba(255,204,0,0.22);
   color: var(--accent);
+  border-color: rgba(255,204,0,0.35);
 }
 .settings-shortcut {
   color: var(--text-sub);
 }
 .settings-shortcut .shortcut-key {
-  background: var(--bg-app);
+  background: rgba(255,255,255,0.5);
   color: var(--text-main);
 }
 .settings-shortcut .shortcut-hint {
@@ -460,8 +483,8 @@ body.capture-preparing *::after {
 
 /* Settings input fields (LLM config) */
 .settings-input {
-  background: var(--bg-app);
-  border: 1px solid #E4E4E7;
+  background: rgba(255,255,255,0.45);
+  border: 1px solid rgba(160, 175, 210, 0.35);
   border-radius: var(--radius-sm);
   padding: 4px 8px;
   font-size: 12px;
@@ -471,21 +494,20 @@ body.capture-preparing *::after {
   margin-left: 12px;
   text-align: right;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, background 0.15s;
 }
-/* Keep labels from being squeezed so the input can grow to fill the row. */
 .settings-row > .settings-label {
   flex: 0 0 auto;
   white-space: nowrap;
 }
 .settings-input:focus {
-  border-color: var(--accent);
+  border-color: rgba(120, 160, 255, 0.65);
+  background: rgba(255,255,255,0.7);
 }
 .settings-input::placeholder {
-  color: #D4D4D8;
+  color: rgba(92, 99, 112, 0.5);
 }
 
-/* Prompt row: label on top, full-width textarea below. */
 .settings-row-vertical {
   flex-direction: column;
   align-items: stretch;
@@ -546,14 +568,17 @@ body[data-mode="overlay"] {
 }
 .overlay-box {
   position: absolute;
-  background: rgba(255,255,255,0.96);
+  background: rgba(255,255,255,0.92);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(120, 160, 255, 0.3);
   color: var(--text-main);
-  border-radius: 4px;
+  border-radius: 10px;
   padding: 10px 14px;
   font-size: 14px;
   line-height: 1.55;
   pointer-events: auto;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+  box-shadow: 0 8px 28px rgba(30,50,90,0.16);
   max-width: 90vw;
 }
 

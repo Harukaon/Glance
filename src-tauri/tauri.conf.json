@@ -26,7 +26,8 @@
         "minHeight": 88,
         "decorations": true,
         "shadow": true,
-        "backgroundColor": "#F3F4F6",
+        "transparent": true,
+        "backgroundColor": "#00000000",
         "visible": false
       }
     ]
