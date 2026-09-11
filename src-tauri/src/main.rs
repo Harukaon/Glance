@@ -192,6 +192,14 @@ fn main() {
             // ── Intercept window close → hide to tray ────────────────────
             let main_window = app.get_webview_window("main").unwrap();
 
+            // DeskBox / WinUI-like light Mica behind the WebView (not heavy Acrylic).
+            #[cfg(target_os = "windows")]
+            {
+                use window_vibrancy::apply_mica;
+                // Some(false) = light mica (Win11); falls back quietly on older builds.
+                let _ = apply_mica(&main_window, Some(false));
+            }
+
             // Silent startup: when launched via OS autostart the app is run with
             // `--minimized`, so keep the main window hidden (tray only). The window
             // is created hidden (see tauri.conf.json), so a normal launch must

@@ -313,23 +313,44 @@ fn get_cursor_position() -> Result<(i32, i32), String> {
 // ── Screen capture ──────────────────────────────────────────────────────────
 
 /// Capture the screen to raw RGBA bytes in memory (no file I/O).
-#[cfg(not(target_os = "macos"))]
+///
+/// On Windows, `display-info` geometry is already in the process DPI space and
+/// `screenshots::Screen::capture()` multiplies by `scale_factor` again, which
+/// breaks mixed-DPI layouts (e.g. 100% + 125%) and yields a black overlay.
+/// Use `capture_area_ignore_area_check` with the reported size instead.
+#[cfg(target_os = "windows")]
+pub fn capture_screen_to_memory(screen: CaptureScreen) -> AppResult<(Vec<u8>, u32, u32)> {
+    let t0 = std::time::Instant::now();
+    let info = screen.display_info;
+    let capture = screen
+        .capture_area_ignore_area_check(0, 0, info.width, info.height)
+        .map_err(|e| AppError::Capture(e.to_string()))?;
+    tracing::info!(
+        "[PERF][capture] screen.capture_area_ignore_area_check (BitBlt): {:?}",
+        t0.elapsed()
+    );
+
+    let w = capture.width();
+    let h = capture.height();
+    let rgba_bytes = capture.into_raw();
+    tracing::info!(
+        "[PERF][capture] raw RGBA bytes: {} ({:.1} MB), {}x{}",
+        rgba_bytes.len(),
+        rgba_bytes.len() as f64 / 1_048_576.0,
+        w,
+        h
+    );
+
+    Ok((rgba_bytes, w, h))
+}
+
+/// Capture the screen to raw RGBA bytes in memory (no file I/O).
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 pub fn capture_screen_to_memory(screen: CaptureScreen) -> AppResult<(Vec<u8>, u32, u32)> {
     let t0 = std::time::Instant::now();
     let capture = screen
         .capture()
         .map_err(|e| AppError::Capture(e.to_string()))?;
-    #[cfg(target_os = "windows")]
-    tracing::info!(
-        "[PERF][capture] screen.capture() (BitBlt): {:?}",
-        t0.elapsed()
-    );
-    #[cfg(target_os = "macos")]
-    tracing::info!(
-        "[PERF][capture] screen.capture() (CoreGraphics): {:?}",
-        t0.elapsed()
-    );
-    #[cfg(target_os = "linux")]
     tracing::info!("[PERF][capture] screen.capture(): {:?}", t0.elapsed());
 
     let w = capture.width();
@@ -374,9 +395,12 @@ pub fn capture_virtual_desktop_to_memory() -> AppResult<VirtualDesktopCapture> {
     let mut snapshots = Vec::with_capacity(screens.len());
     for screen in screens {
         let info = &screen.display_info;
-        // `display-info` exposes logical geometry, while `screenshots` returns
-        // physical RGBA pixels after multiplying by this display's scale factor.
-        // Convert both position and extent before composing mixed-DPI displays.
+        // Windows: display-info x/y/width/height are already physical pixels.
+        // Linux/other: treat them as logical and scale to match Screen::capture().
+        #[cfg(target_os = "windows")]
+        let (x, y, expected_width, expected_height) =
+            (info.x, info.y, info.width, info.height);
+        #[cfg(not(target_os = "windows"))]
         let (x, y, expected_width, expected_height) = physical_display_geometry(
             info.x,
             info.y,
@@ -432,6 +456,7 @@ pub fn capture_virtual_desktop_to_memory() -> AppResult<VirtualDesktopCapture> {
     })
 }
 
+#[cfg(not(target_os = "windows"))]
 fn physical_display_geometry(
     x: i32,
     y: i32,
@@ -492,8 +517,11 @@ fn virtual_desktop_bounds(monitors: &[(i32, i32, u32, u32)]) -> AppResult<(i32, 
 
 #[cfg(test)]
 mod tests {
-    use super::{physical_display_geometry, virtual_desktop_bounds};
+    #[cfg(not(target_os = "windows"))]
+    use super::physical_display_geometry;
+    use super::virtual_desktop_bounds;
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn display_geometry_is_converted_to_physical_pixels() {
         assert_eq!(

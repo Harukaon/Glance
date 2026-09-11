@@ -38,9 +38,13 @@ objc2-app-kit = { version = "0.2.2", features = ["NSWindow", "NSEvent"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.55"
+window-vibrancy = "0.6"
 
 [features]
-default = []
+default = ["custom-protocol"]
+# Required for release builds: without this, Tauri keeps cfg(dev) and loads
+# http://127.0.0.1:1420 instead of the embedded ../ui assets.
+custom-protocol = ["tauri/custom-protocol"]
 
 # Speed up screenshot capture and image processing in debug builds.
 # BitBlt drops from ~473ms to ~50-100ms with opt-level=2.

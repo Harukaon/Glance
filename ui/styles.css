@@ -1,16 +1,30 @@
 :root {
-  --bg-app: #F3F4F6;
-  --block-bg: #FFFFFF;
-  --accent: #FFCC00;
-  --text-main: #111827;
-  --text-sub: #6B7280;
-  --radius-xl: 20px;
-  --radius-md: 14px;
-  --radius-sm: 8px;
-  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", "Microsoft YaHei", sans-serif;
+  /* Closer to DeskBox / WinUI 3 light Fluent — not heavy acrylic bubbles */
+  --bg-app: transparent;
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-solid: #ffffff;
+  --surface-subtle: rgba(249, 249, 249, 0.88);
+  --stroke: rgba(0, 0, 0, 0.06);
+  --stroke-strong: rgba(0, 0, 0, 0.09);
+  --block-bg: var(--surface);
+  --accent: #0078d4;
+  --accent-soft: rgba(0, 120, 212, 0.12);
+  --accent-warn: #FFCC00;
+  --text-main: #1a1a1a;
+  --text-sub: #5d5d5d;
+  --radius-xl: 8px;
+  --radius-md: 6px;
+  --radius-sm: 4px;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+  font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body, #app { width: 100%; height: 100%; background: var(--bg-app); color: var(--text-main); }
+html, body, #app {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: var(--text-main);
+}
 button, select, input, textarea { font: inherit; }
 
 html.capture-preparing,
@@ -32,32 +46,38 @@ body.capture-preparing *::after {
   transition: none !important;
 }
 
-/* ── Bento container ── */
+/* Flat Fluent shell — no nested blue glass frame */
 .bento-app {
   width: 100%;
   height: 100%;
-  background: var(--bg-app);
-  padding: 12px;
+  background: rgba(243, 243, 243, 0.55);
+  padding: 10px 12px 12px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 
-/* ── Generic block card ── */
 .block {
-  background: var(--block-bg);
+  background: var(--surface-solid);
+  border: 1px solid var(--stroke);
   border-radius: var(--radius-xl);
-  padding: 16px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-card);
 }
 
-/* ── Header: language + toggle ── */
 .header-block {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 8px 12px;
   flex-shrink: 0;
+  background: var(--surface-solid);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
 }
 .header-left {
   display: flex;
@@ -65,14 +85,14 @@ body.capture-preparing *::after {
   gap: 12px;
 }
 .app-title {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--text-main);
 }
 .header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 .autostart-label {
   font-size: 12px;
@@ -83,7 +103,7 @@ body.capture-preparing *::after {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-main);
 }
@@ -91,42 +111,41 @@ body.capture-preparing *::after {
   background: transparent;
   border: none;
   color: var(--text-main);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   outline: none;
   appearance: none;
   -webkit-appearance: none;
   padding: 2px 4px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .lang-pill select:hover { background: rgba(0,0,0,0.04); }
 .lang-swap {
-  color: #A1A1AA;
+  color: #8a8a8a;
   font-size: 14px;
   line-height: 1;
   background: none;
   border: none;
   cursor: pointer;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .lang-swap:hover {
   background: rgba(0,0,0,0.04);
   color: var(--text-main);
 }
 
-/* Toggle */
 .toggle {
-  width: 32px;
-  height: 18px;
-  background: #E4E4E7;
+  width: 40px;
+  height: 20px;
+  background: #c8c8c8;
   border-radius: 20px;
   position: relative;
   cursor: pointer;
   border: none;
   padding: 0;
-  transition: background 0.2s;
+  transition: background 0.15s;
   flex-shrink: 0;
 }
 .toggle::after {
@@ -134,23 +153,23 @@ body.capture-preparing *::after {
   position: absolute;
   left: 2px;
   top: 2px;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   background: white;
   border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  transition: transform 0.2s, background 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+  transition: transform 0.15s;
 }
 .toggle.on { background: var(--accent); }
-.toggle.on::after { transform: translateX(14px); }
+.toggle.on::after { transform: translateX(20px); }
 
-/* Engine switcher */
 .engine-switcher {
   display: flex;
   gap: 0;
-  background: #F4F4F5;
-  border-radius: 8px;
+  background: #f0f0f0;
+  border-radius: var(--radius-md);
   padding: 2px;
+  border: 1px solid var(--stroke);
 }
 .engine-btn {
   background: none;
@@ -160,35 +179,33 @@ body.capture-preparing *::after {
   font-weight: 500;
   color: var(--text-sub);
   padding: 4px 10px;
-  border-radius: 6px;
-  transition: all 0.15s;
+  border-radius: 4px;
+  transition: all 0.12s;
   white-space: nowrap;
 }
 .engine-btn:hover { color: var(--text-main); }
 .engine-btn.active {
-  background: var(--block-bg);
+  background: #fff;
   color: var(--text-main);
   box-shadow: 0 1px 2px rgba(0,0,0,0.06);
 }
 
-/* Settings panel */
 .settings-panel {
-  background: var(--block-bg);
+  background: var(--surface-solid);
+  border: 1px solid var(--stroke);
   border-radius: var(--radius-xl);
-  padding: 14px 16px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-card);
   flex: 1 1 auto;
   min-height: 0;
-  /* Scroll with the wheel when content overflows, but never show a scrollbar
-     (its appearance/disappearance during the resize caused a flash). */
   overflow-y: auto;
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* old Edge */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 .settings-panel::-webkit-scrollbar {
   width: 0;
   height: 0;
-  display: none; /* Chromium / WebView2 */
+  display: none;
 }
 .settings-section {
   display: flex;
@@ -213,8 +230,8 @@ body.capture-preparing *::after {
   line-height: 1;
   color: var(--text-sub);
   padding: 4px;
-  border-radius: 6px;
-  transition: all 0.15s;
+  border-radius: var(--radius-sm);
+  transition: all 0.12s;
 }
 .settings-btn:hover { color: var(--text-main); background: rgba(0,0,0,0.04); }
 .settings-btn.open { color: var(--accent); }
@@ -229,10 +246,8 @@ body.capture-preparing *::after {
   line-height: 1;
   color: var(--text-sub);
   padding: 4px;
-  border-radius: 6px;
-  transition: all 0.15s;
-  /* 斜过来 = 图钉被拔起来了（未置顶）；摆正 + 填充 = 钉住（置顶）。
-     图标本身画成正立的，所以这里的角度就是用户实际看到的角度。 */
+  border-radius: var(--radius-sm);
+  transition: all 0.12s;
   transform: rotate(-45deg);
 }
 .pin-btn svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
@@ -240,23 +255,14 @@ body.capture-preparing *::after {
 .pin-btn.on { color: var(--accent); transform: rotate(0deg); }
 .pin-btn.on svg { fill: currentColor; stroke: none; }
 
-/* ── Collapse: 窗口拉到只剩横栏时先收掉输入/输出 ── */
-/* 横栏本身 flex-shrink:0，最小高度就是它 + 上下 padding；正文一矮到没法用就
-   整个收起来，而不是让用户拖不动。设置面板展开时不收（那时窗口会被撑开）。 */
 @media (max-height: 176px) {
   .bento-app:not(.settings-open) .text-block { display: none; }
 }
-/* 横栏里的东西在窄窗口下按重要性依次让位：标题、按钮文字。 */
 @media (max-width: 440px) {
   .header-block .app-title { display: none; }
   .header-block .capture-btn .btn-label { display: none; }
 }
 
-/* ── Text block: left input + right output ── */
-/* The translation area fills the window when settings are collapsed. When the
-   settings panel is visible (window grows), its height is capped so it stays
-   the same size and the extra vertical space is absorbed by the settings
-   panel below. */
 .text-block {
   display: flex;
   flex-direction: row;
@@ -277,7 +283,7 @@ body.capture-preparing *::after {
 }
 .input-col {
   padding-right: 10px;
-  border-right: 1px solid #F0F0F2;
+  border-right: 1px solid var(--stroke-strong);
 }
 .output-col {
   padding-left: 10px;
@@ -290,7 +296,7 @@ body.capture-preparing *::after {
   border: none;
   outline: none;
   resize: none;
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.5;
   color: var(--text-main);
   font-family: inherit;
@@ -305,11 +311,11 @@ body.capture-preparing *::after {
 .input-area {
   flex: 1;
   min-height: 0;
-  font-weight: 500;
+  font-weight: 400;
   padding-right: 8px;
   overflow-y: auto;
 }
-.input-area::placeholder { color: #D4D4D8; }
+.input-area::placeholder { color: #9a9a9a; }
 .meta-info {
   display: flex;
   justify-content: space-between;
@@ -321,9 +327,9 @@ body.capture-preparing *::after {
   gap: 4px;
 }
 .detect-tag {
-  background: #F4F4F5;
+  background: #f3f3f3;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-weight: 500;
   font-size: 11px;
   color: var(--text-sub);
@@ -335,8 +341,8 @@ body.capture-preparing *::after {
   color: var(--text-sub);
   font-size: 14px;
   padding: 2px 4px;
-  border-radius: 4px;
-  transition: color 0.15s;
+  border-radius: var(--radius-sm);
+  transition: color 0.12s;
   line-height: 1;
 }
 .tts-btn:hover { color: var(--text-main); }
@@ -347,7 +353,6 @@ body.capture-preparing *::after {
   overflow-y: auto;
 }
 
-/* Ensure output textarea also fills available space like input textarea */
 .output-area {
   flex: 1;
   min-height: 0;
@@ -361,7 +366,7 @@ body.capture-preparing *::after {
   min-height: 0;
 }
 .output-primary {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   line-height: 1.5;
   color: var(--text-main);
@@ -374,9 +379,9 @@ body.capture-preparing *::after {
   gap: 6px;
 }
 .alt-tag {
-  background: #F4F4F5;
+  background: #f3f3f3;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: 500;
   color: var(--text-sub);
@@ -384,16 +389,15 @@ body.capture-preparing *::after {
   line-height: 1.4;
 }
 
-/* ── Capture button in header ── */
 .capture-btn {
   background: none;
   border: none;
   cursor: pointer;
   color: var(--text-sub);
-  font-size: 16px;
-  padding: 2px 6px;
-  border-radius: 6px;
-  transition: all 0.15s;
+  font-size: 15px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: all 0.12s;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -409,59 +413,60 @@ body.capture-preparing *::after {
   color: var(--text-sub);
 }
 .capture-shortcut .shortcut-key {
-  background: var(--bg-app);
+  background: #f3f3f3;
   color: var(--text-main);
-  font-family: monospace;
+  font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 10px;
   padding: 1px 4px;
   border-radius: 3px;
+  border: 1px solid var(--stroke);
 }
 
-/* ── Shortcut row ── */
 .shortcut-row {
   font-size: 12px;
-  color: #A1A1AA;
+  color: var(--text-sub);
   display: flex;
   align-items: center;
   gap: 4px;
   cursor: pointer;
   user-select: none;
 }
-.shortcut-row:hover { color: #D4D4D8; }
+.shortcut-row:hover { color: var(--text-main); }
 .shortcut-key {
-  background: rgba(255,255,255,0.1);
+  background: #f3f3f3;
+  border: 1px solid var(--stroke);
   padding: 2px 6px;
-  border-radius: 4px;
-  color: white;
-  font-family: monospace;
+  border-radius: 3px;
+  color: var(--text-main);
+  font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
 }
 .shortcut-row.recording { color: var(--accent); }
 .shortcut-hint {
   font-size: 11px;
-  color: #71717A;
+  color: #8a8a8a;
   margin-left: 6px;
 }
-.shortcut-row:hover .shortcut-hint { color: #D4D4D8; }
+.shortcut-row:hover .shortcut-hint { color: var(--text-sub); }
 .shortcut-row.recording .shortcut-key {
-  background: rgba(255,204,0,0.2);
+  background: var(--accent-soft);
   color: var(--accent);
+  border-color: rgba(0, 120, 212, 0.28);
 }
 .settings-shortcut {
   color: var(--text-sub);
 }
 .settings-shortcut .shortcut-key {
-  background: var(--bg-app);
+  background: #f3f3f3;
   color: var(--text-main);
 }
 .settings-shortcut .shortcut-hint {
   color: var(--text-sub);
 }
 
-/* Settings input fields (LLM config) */
 .settings-input {
-  background: var(--bg-app);
-  border: 1px solid #E4E4E7;
+  background: #fff;
+  border: 1px solid var(--stroke-strong);
   border-radius: var(--radius-sm);
   padding: 4px 8px;
   font-size: 12px;
@@ -471,21 +476,20 @@ body.capture-preparing *::after {
   margin-left: 12px;
   text-align: right;
   outline: none;
-  transition: border-color 0.15s;
+  transition: border-color 0.12s;
 }
-/* Keep labels from being squeezed so the input can grow to fill the row. */
 .settings-row > .settings-label {
   flex: 0 0 auto;
   white-space: nowrap;
 }
 .settings-input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
 }
 .settings-input::placeholder {
-  color: #D4D4D8;
+  color: #9a9a9a;
 }
 
-/* Prompt row: label on top, full-width textarea below. */
 .settings-row-vertical {
   flex-direction: column;
   align-items: stretch;
@@ -516,14 +520,12 @@ body.capture-preparing *::after {
   margin-top: 8px;
 }
 
-/* ── Status ── */
 .status-text {
   font-size: 12px;
   color: var(--text-sub);
 }
-.status-text.error { color: #f44336; }
+.status-text.error { color: #c42b1c; }
 
-/* ── Loading dots ── */
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 .dot-loading {
   display: inline-flex;
@@ -539,7 +541,6 @@ body.capture-preparing *::after {
 .dot-loading span:nth-child(2) { animation-delay: 0.2s; }
 .dot-loading span:nth-child(3) { animation-delay: 0.4s; }
 
-/* ── Overlay (kept for overlay.html) ── */
 body[data-mode="overlay"] {
   background: transparent;
   pointer-events: none;
@@ -547,17 +548,17 @@ body[data-mode="overlay"] {
 .overlay-box {
   position: absolute;
   background: rgba(255,255,255,0.96);
+  border: 1px solid var(--stroke-strong);
   color: var(--text-main);
-  border-radius: 4px;
+  border-radius: var(--radius-xl);
   padding: 10px 14px;
   font-size: 14px;
   line-height: 1.55;
   pointer-events: auto;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
   max-width: 90vw;
 }
 
-/* ── Capture window ── */
 body[data-mode="capture"] {
   background: #000;
   overflow: hidden;
