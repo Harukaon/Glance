@@ -1,5 +1,6 @@
 import { focusTextInputIfAllowed } from "./focus-helpers.mjs";
 import { shouldTranslateOnInput, shouldTranslateOnEnter } from "./ime-guards.mjs";
+import { canRetranslateNow } from "./retranslate.mjs";
 
 const LANGUAGES = [
   { value: "auto", label: "自动检测" },
@@ -127,6 +128,25 @@ function debouncedTranslate() {
   }, 500);
 }
 
+// Changing a language or engine select leaves the *previous* result on screen,
+// which used to mean one more Enter press to see the new one. Re-run the
+// translation on the change instead. `awaitPersisted` matters for the engine:
+// translate_text gets the languages as arguments, but the engine itself is read
+// from the saved settings by the Rust side, so the write has to land first.
+async function retranslateNow({ awaitPersisted = false } = {}) {
+  const s = state.settings;
+  if (!s) return;
+  if (!canRetranslateNow({
+    inputText: state.inputText,
+    engine: s.textTranslateEngine,
+    llmApiKey: s.llmConfig && s.llmConfig.apiKey,
+  })) return;
+  if (awaitPersisted) {
+    try { await saveSettings(); } catch (err) { /* fall back to the stale engine */ }
+  }
+  await translateText();
+}
+
 const app = document.querySelector("#app");
 const mode = window.__APP_MODE__ || "main";
 document.body.dataset.mode = mode.startsWith("overlay") ? "overlay" : "main";
@@ -235,6 +255,9 @@ function swapLanguages() {
   if (fromEl) fromEl.value = nextFrom;
   if (toEl) toEl.value = nextTo;
   saveSettings().catch(() => {});
+  // The swap button changes both languages at once, so the result on screen is
+  // stale for the same reason a dropdown change is.
+  retranslateNow().catch(() => {});
 }
 
 function shortcutKeysHtml(hk) {
@@ -465,8 +488,9 @@ function renderMain() {
       translateText();
     }, 0);
   });
-  document.querySelector("#from-lang").addEventListener("change", e => { state.settings.fromLang = e.target.value; saveSettings().catch(()=>{}); });
-  document.querySelector("#to-lang").addEventListener("change", e => { state.settings.toLang = e.target.value; saveSettings().catch(()=>{}); });
+  // Switching language re-translates right away — no Enter needed.
+  document.querySelector("#from-lang").addEventListener("change", e => { state.settings.fromLang = e.target.value; saveSettings().catch(()=>{}); retranslateNow().catch(()=>{}); });
+  document.querySelector("#to-lang").addEventListener("change", e => { state.settings.toLang = e.target.value; saveSettings().catch(()=>{}); retranslateNow().catch(()=>{}); });
   document.querySelector("#lang-swap").addEventListener("click", e => {
     e.stopPropagation();
     swapLanguages();
@@ -514,6 +538,9 @@ function renderMain() {
       const newEngine = e.currentTarget.dataset.engine;
       state.settings.textTranslateEngine = newEngine;
       saveSettings().catch(() => {});
+      // The engine is read from the saved settings by the Rust side, so this one
+      // waits for the write before re-running the translation.
+      retranslateNow({ awaitPersisted: true }).catch(() => {});
       // Update active state
       document.querySelectorAll("#engine-switcher .engine-btn").forEach(b => b.classList.toggle("active", b.dataset.engine === newEngine));
       // Toggle LLM settings visibility
