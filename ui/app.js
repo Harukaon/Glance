@@ -109,6 +109,13 @@ let debounceTimer = null;
 // and re-translate at any time — even mid-translation.
 let translateSeq = 0;
 
+function cancelPendingTranslation() {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+}
+
 function debouncedTranslate() {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
@@ -134,15 +141,28 @@ function debouncedTranslate() {
 // translate_text gets the languages as arguments, but the engine itself is read
 // from the saved settings by the Rust side, so the write has to land first.
 async function retranslateNow({ awaitPersisted = false } = {}) {
+  cancelPendingTranslation();
   const s = state.settings;
   if (!s) return;
   if (!canRetranslateNow({
     inputText: state.inputText,
     engine: s.textTranslateEngine,
     llmApiKey: s.llmConfig && s.llmConfig.apiKey,
-  })) return;
+  })) {
+    // Keep the previous readable result, but prevent an older request from
+    // committing after the user switched to an option that cannot translate.
+    translateSeq++;
+    return;
+  }
   if (awaitPersisted) {
-    try { await saveSettings(); } catch (err) { /* fall back to the stale engine */ }
+    try {
+      await saveSettings();
+    } catch (err) {
+      // The backend still has the old engine, so do not issue a request that
+      // would look like a successful translation with the wrong configuration.
+      translateSeq++;
+      return;
+    }
   }
   await translateText();
 }
@@ -537,7 +557,6 @@ function renderMain() {
       e.stopPropagation();
       const newEngine = e.currentTarget.dataset.engine;
       state.settings.textTranslateEngine = newEngine;
-      saveSettings().catch(() => {});
       // The engine is read from the saved settings by the Rust side, so this one
       // waits for the write before re-running the translation.
       retranslateNow({ awaitPersisted: true }).catch(() => {});
