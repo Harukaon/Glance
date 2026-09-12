@@ -26,11 +26,10 @@ use bing_translate::BingTranslateClient;
 use builtin_translate::BuiltinTranslateClient;
 use llm_translate::LlmTranslateClient;
 use commands::{
-    begin_capture, begin_copy_capture, cancel_capture, capture_debug_log, clear_history,
-    close_overlay, hide_window, list_history, load_capture_payload, load_overlay_payload,
-    load_settings, resize_main_window, save_settings, set_pin_on_top, show_overlay,
-    submit_capture_selection,
-    translate_text,
+    begin_capture, begin_copy_capture, cancel_capture, capture_debug_log, check_update,
+    clear_history, close_overlay, hide_window, list_history, load_capture_payload,
+    load_overlay_payload, load_settings, open_release_page, resize_main_window, save_settings,
+    set_pin_on_top, show_overlay, submit_capture_selection, translate_text,
 };
 use config::ConfigStore;
 use models::TranslatorSettings;
@@ -229,7 +228,9 @@ fn main() {
             resize_main_window,
             set_pin_on_top,
             hide_window,
-            capture_debug_log
+            capture_debug_log,
+            check_update,
+            open_release_page
         ])
         .build(tauri::generate_context!())
         .expect("failed to build tauri app");
