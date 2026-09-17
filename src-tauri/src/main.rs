@@ -29,7 +29,7 @@ use commands::{
     begin_capture, begin_copy_capture, cancel_capture, capture_debug_log, clear_history,
     close_overlay, hide_window, list_history, load_capture_payload, load_overlay_payload,
     load_settings, resize_main_window, save_settings, set_pin_on_top, show_overlay,
-    submit_capture_selection,
+    start_capture_translate, submit_capture_selection,
     translate_text,
 };
 use config::ConfigStore;
@@ -164,8 +164,9 @@ fn main() {
             let icon = Image::from_bytes(include_bytes!("../icons/icon.png"))?;
 
             let show = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
+            let capture_translate = MenuItemBuilder::with_id("capture_translate", "截图翻译").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
-            let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+            let menu = MenuBuilder::new(app).items(&[&show, &capture_translate, &quit]).build()?;
 
             TrayIconBuilder::new()
                 .icon(icon)
@@ -174,6 +175,9 @@ fn main() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
                         show_main_window(app);
+                    }
+                    "capture_translate" => {
+                        start_capture_translate(app);
                     }
                     "quit" => {
                         app.exit(0);

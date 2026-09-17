@@ -231,6 +231,15 @@ pub fn apply_pin_on_top(app: &AppHandle, pinned: bool) {
     }
 }
 
+/// Start a capture-translate session from outside the command module (e.g. tray menu).
+pub fn start_capture_translate(app: &AppHandle) {
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state: State<'_, SharedState> = app_clone.state();
+        let _ = begin_capture_with_mode(app_clone.clone(), state, CaptureMode::Translate).await;
+    });
+}
+
 /// 主窗口置顶开关。
 #[tauri::command]
 pub async fn set_pin_on_top(app: AppHandle, pinned: bool) -> AppResult<()> {
