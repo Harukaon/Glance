@@ -1,6 +1,7 @@
 import { focusTextInputIfAllowed } from "./focus-helpers.mjs";
 import { shouldTranslateOnInput, shouldTranslateOnEnter } from "./ime-guards.mjs";
 import { canRetranslateNow } from "./retranslate.mjs";
+import { isNewerVersion } from "./version.mjs";
 
 const LANGUAGES = [
   { value: "auto", label: "自动检测" },
@@ -320,6 +321,98 @@ async function ensureTauriApi() {
 async function loadSettings() { state.settings = await invoke("load_settings"); }
 async function saveSettings() { state.settings = await invoke("save_settings", { settings: state.settings }); }
 
+// 更新检查：只查 GitHub Releases 的最新 tag，比当前版本新才把按钮换成「打开下载页」。
+// 版本比较在 ui/version.mjs（有单测）。打开动作走 Rust 的 open_release_page，它不收
+// 参数、要打开的地址是 Rust 侧的常量，前端这里只负责说「打开」。
+// 启动后静默查一次，查不到（离线 / 限流）不打扰。
+//
+// 这一行的状态全收在下面几个变量里，只有 renderUpdateRow() 一处写 DOM。启动那次静默
+// 检查和用户手动点的那次可能同时在飞（静默那次走代理最长 20s），所以照 translateSeq
+// 的同一办法处理：每次检查领一个号，回来时号不是最新的那一次直接丢弃，不碰状态也不碰
+// DOM —— 否则「更早发出、更晚返回」的那次会把用户刚点出来的结果盖掉。
+let pendingUpdate = null;
+let updateChecking = false;
+let updateHint = "";
+let updateSeq = 0;
+let appVersion = "";
+let silentUpdateStarted = false;
+
+function renderUpdateRow() {
+  const btn = document.querySelector("#check-update-btn");
+  const hint = document.querySelector("#update-hint");
+  const versionEl = document.querySelector("#app-version");
+  if (versionEl) versionEl.textContent = appVersion || "-";
+  if (!btn || !hint) return;
+  btn.textContent = updateChecking ? "检查中…" : (pendingUpdate ? "打开下载页" : "检查更新");
+  btn.disabled = updateChecking;
+  btn.dataset.action = pendingUpdate ? "open" : "check";
+  hint.textContent = updateHint;
+}
+
+async function resolveAppVersion() {
+  if (appVersion) return;
+  try {
+    // getVersion 返回 Promise，不 await 就把一个 Promise 写进文本里了。
+    appVersion = (await window.__TAURI__?.app?.getVersion?.()) || "";
+  } catch (err) {
+    /* 浏览器预览里没有这个 API，留占位符 */
+  }
+  renderUpdateRow();
+}
+
+async function runUpdateCheck({ silent = false } = {}) {
+  const seq = ++updateSeq;
+  const isCurrent = () => seq === updateSeq;
+  updateChecking = true;
+  if (!silent) updateHint = "";
+  renderUpdateRow();
+
+  let info = null;
+  try {
+    info = await invoke("check_update");
+  } catch (err) {
+    if (!isCurrent()) return;
+    updateChecking = false;
+    if (!silent) updateHint = "检查失败，稍后再试";
+    renderUpdateRow();
+    return;
+  }
+  if (!isCurrent()) return;
+
+  updateChecking = false;
+  if (info && info.current) appVersion = info.current;
+  if (info && isNewerVersion(info.latest, info.current)) {
+    pendingUpdate = info;
+    // 静默那次也要把「有新版本」写在提示里：这行本来就是给用户看的。
+    updateHint = "有新版本 " + info.latest;
+  } else {
+    pendingUpdate = null;
+    if (!silent) updateHint = info ? "已是最新" : "查不到，稍后再试";
+  }
+  renderUpdateRow();
+}
+
+function bindUpdateRow() {
+  const btn = document.querySelector("#check-update-btn");
+  if (!btn) return;
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    if (e.currentTarget.dataset.action === "open") {
+      invoke("open_release_page").catch(() => {});
+      return;
+    }
+    if (!updateChecking) runUpdateCheck();
+  });
+  // renderMain() 会整块换掉 innerHTML，所以每次重渲染都要把状态补回新节点，
+  // 而不是等下一次检查才把「打开下载页」显示出来。
+  renderUpdateRow();
+  resolveAppVersion();
+  if (!silentUpdateStarted) {
+    silentUpdateStarted = true;
+    runUpdateCheck({ silent: true });
+  }
+}
+
 async function bindMainListeners() {
   if (state.listenersBound || mode !== "main") return;
   if (!listen) {
@@ -435,6 +528,14 @@ function renderMain() {
               ${state.settings.popupShortcut ? shortcutKeysHtml(state.settings.popupShortcut) : "未设置"} <span class="shortcut-hint">点击可设置</span>
             </div>
           </div>
+          <div class="settings-row">
+            <span class="settings-label">版本</span>
+            <div class="update-row">
+              <span class="settings-hint" id="app-version">-</span>
+              <button type="button" class="update-btn" id="check-update-btn">检查更新</button>
+              <span class="settings-hint" id="update-hint"></span>
+            </div>
+          </div>
         </div>
         <div class="settings-section" id="llm-settings" style="${state.settings.textTranslateEngine === "llm" ? "" : "display:none"}">
           <div class="settings-row">
@@ -538,6 +639,9 @@ function renderMain() {
     saveSettings().catch(() => {});
   });
   document.querySelector("#tts-btn").addEventListener("click", speakInput);
+
+  // 版本 / 检查更新
+  bindUpdateRow();
 
   // 置顶：状态从 settings 走，按钮高亮和窗口实际 topmost 都由 applyPin 同步。
   document.querySelector("#pin-btn").addEventListener("click", e => {

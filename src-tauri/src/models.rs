@@ -354,3 +354,16 @@ impl TranslationHistoryItem {
         }
     }
 }
+
+/// 一次更新检查的结果。latest 已过白名单（去 v 前缀，只留 0-9a-z.-+），谁更新交给
+/// 前端判（ui/version.mjs 里有单测），Rust 这边不做版本比较。
+/// 这里刻意没有 url 字段：要打开的地址是 commands.rs 里的常量，不让一个从前端
+/// 绕回来的字符串再去决定浏览器打开哪儿。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub latest: String,
+    pub current: String,
+    pub notes: String,
+    pub published_at: String,
+}
