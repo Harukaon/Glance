@@ -1,6 +1,7 @@
 import { focusTextInputIfAllowed } from "./focus-helpers.mjs";
 import { shouldTranslateOnInput, shouldTranslateOnEnter } from "./ime-guards.mjs";
 import { canRetranslateNow } from "./retranslate.mjs";
+import { recordedBinding, rowClasses, shouldEnterRecording } from "./hotkey-enable.mjs";
 import { isNewerVersion } from "./version.mjs";
 
 const LANGUAGES = [
@@ -213,7 +214,9 @@ function defaultSettings() {
     closeOnOutsideClick: true,
     autostart: false,
     hotkey: "CommandOrControl+Shift+X",
+    hotkeyEnabled: true,
     copyHotkey: "CommandOrControl+Shift+C",
+    copyHotkeyEnabled: true,
     textTranslateEngine: "bing",
     llmConfig: {
       baseUrl: "https://api.openai.com/v1/chat/completions",
@@ -223,6 +226,7 @@ function defaultSettings() {
       autoPrompt: "You are a professional translator. Detect the source language and translate the following text to {to}. Only output the translation, nothing else. Do not add explanations or notes."
     },
     popupShortcut: null,
+    popupShortcutEnabled: true,
     proxyMode: "system",
     customProxy: "",
     pinOnTop: false
@@ -284,6 +288,54 @@ function swapLanguages() {
 function shortcutKeysHtml(hk) {
   const parts = hk.replace("CommandOrControl", "Ctrl").split("+");
   return parts.map(p => `<span class="shortcut-key">${escapeHtml(p)}</span>`).join(" + ");
+}
+
+// A shortcut line is the enable switch plus the binding itself. The flag lives
+// next to the combo it parks (`hotkeyEnabled` …), never inside it, so switching
+// off is reversible without re-recording.
+const HOTKEY_ROWS = [
+  { rowId: "shortcut-row", comboKey: "hotkey", enableKey: "hotkeyEnabled", start: startHotkeyRecording },
+  { rowId: "copy-shortcut-row", comboKey: "copyHotkey", enableKey: "copyHotkeyEnabled", start: startCopyHotkeyRecording },
+  { rowId: "popup-shortcut-row", comboKey: "popupShortcut", enableKey: "popupShortcutEnabled", start: startPopupShortcutRecording },
+];
+
+const hotkeyRow = (rowId) => HOTKEY_ROWS.find(r => r.rowId === rowId);
+
+// `#hotkey-group-<rowId>` is what the click handler binds to; the switch sits after
+// the binding so the row reads "快捷键: … 点击可设置 [开关]" and the switches of all
+// three rows line up on the same right edge.
+function hotkeyGroupHtml(rowId, bindingHtml) {
+  const row = hotkeyRow(rowId);
+  const binding = { combo: state.settings[row.comboKey], enabled: state.settings[row.enableKey] };
+  const classes = rowClasses(binding);
+  return `
+            <div class="hotkey-row" id="hotkey-group-${rowId}">
+              <div class="shortcut-row settings-shortcut ${classes.binding}" id="${rowId}">${bindingHtml}</div>
+              <button type="button" class="toggle hotkey-enable ${classes.toggle}" data-hotkey-enable="${row.enableKey}" aria-pressed="${binding.enabled}"></button>
+            </div>`;
+}
+
+function flipHotkeyEnabled(row) {
+  // Only the flag is written here: `save_settings` on the Rust side decides
+  // whether the stored combo gets registered or dropped, and the combo string
+  // itself is left alone so the shortcut can simply be turned back on.
+  state.settings[row.enableKey] = !state.settings[row.enableKey];
+  syncHotkeyRow(row);
+  saveSettings().catch(() => {});
+}
+
+// Repaint the switch and its binding from the stored flag. Both come from the
+// same mapping the unit tests cover (./hotkey-enable.mjs).
+function syncHotkeyRow(row) {
+  const binding = { combo: state.settings[row.comboKey], enabled: state.settings[row.enableKey] };
+  const classes = rowClasses(binding);
+  const el = document.querySelector(`#${row.rowId}`);
+  if (el) el.classList.toggle("shortcut-off", classes.binding === "shortcut-off");
+  const toggle = document.querySelector(`#hotkey-group-${row.rowId} .hotkey-enable`);
+  if (toggle) {
+    toggle.classList.toggle("on", classes.toggle === "on");
+    toggle.setAttribute("aria-pressed", String(binding.enabled));
+  }
 }
 
 function renderFatal(msg) {
@@ -512,21 +564,21 @@ function renderMain() {
           </div>
           <div class="settings-row">
             <span class="settings-label">截图翻译</span>
-            <div class="shortcut-row settings-shortcut" id="shortcut-row">
+            ${hotkeyGroupHtml("shortcut-row", `
               快捷键: ${state.settings.hotkey ? shortcutKeysHtml(state.settings.hotkey) : "未设置"} <span class="shortcut-hint">点击可设置</span>
-            </div>
+            `)}
           </div>
           <div class="settings-row">
             <span class="settings-label">截图复制</span>
-            <div class="shortcut-row settings-shortcut" id="copy-shortcut-row">
+            ${hotkeyGroupHtml("copy-shortcut-row", `
               快捷键: ${state.settings.copyHotkey ? shortcutKeysHtml(state.settings.copyHotkey) : "未设置"} <span class="shortcut-hint">点击可设置</span>
-            </div>
+            `)}
           </div>
           <div class="settings-row">
             <span class="settings-label">弹出窗口</span>
-            <div class="shortcut-row settings-shortcut" id="popup-shortcut-row">
+            ${hotkeyGroupHtml("popup-shortcut-row", `
               ${state.settings.popupShortcut ? shortcutKeysHtml(state.settings.popupShortcut) : "未设置"} <span class="shortcut-hint">点击可设置</span>
-            </div>
+            `)}
           </div>
           <div class="settings-row">
             <span class="settings-label">版本</span>
@@ -651,9 +703,19 @@ function renderMain() {
     saveSettings().catch(() => {});
   });
   document.querySelector("#capture-btn").addEventListener("click", e => { e.stopPropagation(); startCapture(); });
-  document.querySelector("#shortcut-row").addEventListener("click", e => { e.stopPropagation(); startHotkeyRecording(); });
-  document.querySelector("#copy-shortcut-row").addEventListener("click", e => { e.stopPropagation(); startCopyHotkeyRecording(); });
-  document.querySelector("#popup-shortcut-row").addEventListener("click", e => { e.stopPropagation(); startPopupShortcutRecording(); });
+  // One handler per shortcut line. The enable switch sits inside that line, so a
+  // click either flips the switch or opens the recorder, never both
+  // (see ./hotkey-enable.mjs).
+  for (const row of HOTKEY_ROWS) {
+    document.querySelector(`#hotkey-group-${row.rowId}`).addEventListener("click", e => {
+      e.stopPropagation();
+      if (!shouldEnterRecording({ target: e.target })) {
+        flipHotkeyEnabled(row);
+        return;
+      }
+      row.start();
+    });
+  }
 
   // Engine switcher
   document.querySelectorAll("#engine-switcher .engine-btn").forEach(btn => {
@@ -886,7 +948,9 @@ function startHotkeyRecording() {
     document.removeEventListener("keydown", onKey, true);
     state.hotkeyRecording = false;
     if (combo) {
-      state.settings.hotkey = combo;
+      const recorded = recordedBinding(combo);
+      state.settings.hotkey = recorded.combo;
+      state.settings.hotkeyEnabled = recorded.enabled;
       saveSettings().catch(() => {});
     }
     const r = document.querySelector("#shortcut-row");
@@ -894,6 +958,7 @@ function startHotkeyRecording() {
       r.classList.remove("recording");
       r.innerHTML = `快捷键: ${shortcutKeysHtml(state.settings.hotkey)} <span class="shortcut-hint">点击可设置快捷键</span>`;
     }
+    syncHotkeyRow(hotkeyRow("shortcut-row"));
   }
 
   document.addEventListener("keydown", onKey, true);
@@ -928,7 +993,9 @@ function startCopyHotkeyRecording() {
     document.removeEventListener("keydown", onKey, true);
     state.hotkeyRecording = false;
     if (combo) {
-      state.settings.copyHotkey = combo;
+      const recorded = recordedBinding(combo);
+      state.settings.copyHotkey = recorded.combo;
+      state.settings.copyHotkeyEnabled = recorded.enabled;
       saveSettings().catch(() => {});
     }
     const r = document.querySelector("#copy-shortcut-row");
@@ -936,6 +1003,7 @@ function startCopyHotkeyRecording() {
       r.classList.remove("recording");
       r.innerHTML = `快捷键: ${shortcutKeysHtml(state.settings.copyHotkey)} <span class="shortcut-hint">点击可设置</span>`;
     }
+    syncHotkeyRow(hotkeyRow("copy-shortcut-row"));
   }
 
   document.addEventListener("keydown", onKey, true);
@@ -970,6 +1038,10 @@ function startPopupShortcutRecording() {
     document.removeEventListener("keydown", onKey, true);
     state.hotkeyRecording = false;
     state.settings.popupShortcut = combo || null;
+    // A recorded combo re-arms the switch, because pressing those keys *is* the
+    // request to use them. Escape keeps clearing the binding as it always did and
+    // leaves the switch alone.
+    if (combo) state.settings.popupShortcutEnabled = recordedBinding(combo).enabled;
     saveSettings().catch(() => {});
     const r = document.querySelector("#popup-shortcut-row");
     if (r) {
@@ -977,6 +1049,7 @@ function startPopupShortcutRecording() {
       const display = state.settings.popupShortcut ? shortcutKeysHtml(state.settings.popupShortcut) : "未设置";
       r.innerHTML = `${display} <span class="shortcut-hint">点击可设置</span>`;
     }
+    syncHotkeyRow(hotkeyRow("popup-shortcut-row"));
   }
 
   document.addEventListener("keydown", onKey, true);

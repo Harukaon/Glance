@@ -11,6 +11,7 @@ mod commands;
 mod config;
 mod error;
 mod google_translate;
+mod hotkey_enable;
 mod llm_translate;
 mod models;
 mod popup_shortcut;
@@ -112,11 +113,23 @@ fn main() {
                     .unwrap_or_else(|_| TranslatorSettings::default());
 
                 commands::apply_autostart(&app_handle, settings.autostart);
-                commands::apply_hotkey(&app_handle, &settings.hotkey);
-                if let Some(ref popup) = settings.popup_shortcut {
-                    commands::apply_popup_shortcut(&app_handle, popup);
-                }
-                commands::apply_copy_hotkey(&app_handle, &settings.copy_hotkey);
+                // Each binding goes through the same decision the settings save
+                // uses, so a parked shortcut stays parked across restarts.
+                commands::apply_hotkey(
+                    &app_handle,
+                    &settings.hotkey,
+                    settings.hotkey_enabled,
+                );
+                commands::apply_popup_shortcut(
+                    &app_handle,
+                    settings.popup_shortcut.as_deref().unwrap_or(""),
+                    settings.popup_shortcut_enabled,
+                );
+                commands::apply_copy_hotkey(
+                    &app_handle,
+                    &settings.copy_hotkey,
+                    settings.copy_hotkey_enabled,
+                );
                 commands::apply_pin_on_top(&app_handle, settings.pin_on_top);
 
                 // ── HTTP clients ────────────────────────────────────────────────

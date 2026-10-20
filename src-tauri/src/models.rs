@@ -116,14 +116,23 @@ pub struct TranslatorSettings {
     pub autostart: bool,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    /// Whether the combo above is registered as a global shortcut. The switch is
+    /// deliberately separate from the combo so a shortcut can be parked without
+    /// losing its binding; nothing that flips it may rewrite the combo.
+    #[serde(default = "default_true")]
+    pub hotkey_enabled: bool,
     #[serde(default = "default_copy_hotkey")]
     pub copy_hotkey: String,
+    #[serde(default = "default_true")]
+    pub copy_hotkey_enabled: bool,
     #[serde(default)]
     pub text_translate_engine: TextTranslateEngine,
     #[serde(default)]
     pub llm_config: LlmConfig,
     #[serde(default)]
     pub popup_shortcut: Option<String>,
+    #[serde(default = "default_true")]
+    pub popup_shortcut_enabled: bool,
     #[serde(default)]
     pub proxy_mode: ProxyMode,
     #[serde(default)]
@@ -169,10 +178,13 @@ impl Default for TranslatorSettings {
             close_on_outside_click: true,
             autostart: false,
             hotkey: default_hotkey(),
+            hotkey_enabled: true,
             copy_hotkey: default_copy_hotkey(),
+            copy_hotkey_enabled: true,
             text_translate_engine: TextTranslateEngine::default(),
             llm_config: LlmConfig::default(),
             popup_shortcut: None,
+            popup_shortcut_enabled: true,
             proxy_mode: ProxyMode::default(),
             custom_proxy: String::new(),
             pin_on_top: false,
@@ -212,6 +224,72 @@ fn default_hotkey() -> String {
 
 fn default_copy_hotkey() -> String {
     "CommandOrControl+Shift+C".to_string()
+}
+
+/// The enable switches default to on: settings.json files written before this
+/// feature have no such key, and a shortcut that used to work must keep working
+/// after the upgrade.
+fn default_true() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TranslatorSettings;
+    use serde_json::json;
+
+    /// The switch is state next to the binding, not a holder for it: saving with
+    /// `hotkeyEnabled: false` has to leave the combo readable, or switching back
+    /// on would have nothing to register.
+    #[test]
+    fn disabling_a_hotkey_leaves_the_stored_combo_intact() {
+        let mut settings = TranslatorSettings::default();
+        settings.hotkey_enabled = false;
+        settings.copy_hotkey_enabled = false;
+        let stored = serde_json::to_value(&settings).unwrap();
+        assert_eq!(stored["hotkey"].as_str(), Some(settings.hotkey.as_str()));
+        assert_eq!(
+            stored["copyHotkey"].as_str(),
+            Some(settings.copy_hotkey.as_str())
+        );
+
+        let reread: TranslatorSettings = serde_json::from_value(json!({
+            "fromLang": "en",
+            "toLang": "ja",
+            "clientele": "deskdict",
+            "client": "deskdict",
+            "vendor": "fanyiweb_navigation",
+            "inputChannel": "YoudaoDict_fanyiweb_navigation",
+            "appVersion": "10.3.0.0",
+            "abTest": "2",
+            "model": "default",
+            "screen": "1920*1080",
+            "osVersion": "10.0",
+            "network": "none",
+            "mid": "windows10.0",
+            "product": "deskdict",
+            "yduuid": "0123456789abcdef0",
+            "overlayOpacity": 0.92,
+            "overlayFontScale": 1.0,
+            "closeOnOutsideClick": true,
+            "hotkey": "CommandOrControl+Alt+K",
+            "hotkeyEnabled": false,
+            "copyHotkey": "CommandOrControl+Alt+J",
+            "copyHotkeyEnabled": false,
+            "popupShortcut": "CommandOrControl+Alt+P",
+            "popupShortcutEnabled": false
+        }))
+        .unwrap();
+        assert_eq!(reread.hotkey, "CommandOrControl+Alt+K");
+        assert_eq!(reread.copy_hotkey, "CommandOrControl+Alt+J");
+        assert_eq!(
+            reread.popup_shortcut.as_deref(),
+            Some("CommandOrControl+Alt+P")
+        );
+        assert!(!reread.hotkey_enabled);
+        assert!(!reread.copy_hotkey_enabled);
+        assert!(!reread.popup_shortcut_enabled);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

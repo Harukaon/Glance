@@ -20,6 +20,7 @@ use crate::models::{
     TranslationHistoryItem, TranslatorSettings, UpdateInfo,
 };
 use crate::capture_hotkey::{decide_capture_hotkey_action, CaptureHotkeyAction};
+use crate::hotkey_enable::{decide_hotkey_action, HotkeyAction};
 use crate::popup_shortcut::{decide_popup_shortcut_action, PopupShortcutAction};
 
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
@@ -47,21 +48,37 @@ pub async fn save_settings(
     if settings.autostart != old.autostart {
         apply_autostart(&app, settings.autostart);
     }
-    if settings.hotkey != old.hotkey {
-        unregister_hotkey(&app, &old.hotkey);
-        apply_hotkey(&app, &settings.hotkey);
-    }
-    if settings.popup_shortcut != old.popup_shortcut {
-        if let Some(ref old_shortcut) = old.popup_shortcut {
-            unregister_hotkey(&app, old_shortcut);
+    // The enable switch changes what has to be live without touching the combo,
+    // so it counts as a binding change too. Only a binding the old pair actually
+    // registered needs pulling down, otherwise the new state is applied as-is.
+    if settings.hotkey != old.hotkey || settings.hotkey_enabled != old.hotkey_enabled {
+        if decide_hotkey_action(&old.hotkey, old.hotkey_enabled) == HotkeyAction::Register {
+            unregister_hotkey(&app, &old.hotkey);
         }
-        if let Some(ref new_shortcut) = settings.popup_shortcut {
-            apply_popup_shortcut(&app, new_shortcut);
-        }
+        apply_hotkey(&app, &settings.hotkey, settings.hotkey_enabled);
     }
-    if settings.copy_hotkey != old.copy_hotkey {
-        unregister_copy_hotkey(&app, &old.copy_hotkey);
-        apply_copy_hotkey(&app, &settings.copy_hotkey);
+    if settings.popup_shortcut != old.popup_shortcut
+        || settings.popup_shortcut_enabled != old.popup_shortcut_enabled
+    {
+        let old_popup = old.popup_shortcut.as_deref().unwrap_or("");
+        if decide_hotkey_action(old_popup, old.popup_shortcut_enabled) == HotkeyAction::Register {
+            unregister_hotkey(&app, old_popup);
+        }
+        apply_popup_shortcut(
+            &app,
+            settings.popup_shortcut.as_deref().unwrap_or(""),
+            settings.popup_shortcut_enabled,
+        );
+    }
+    if settings.copy_hotkey != old.copy_hotkey
+        || settings.copy_hotkey_enabled != old.copy_hotkey_enabled
+    {
+        if decide_hotkey_action(&old.copy_hotkey, old.copy_hotkey_enabled)
+            == HotkeyAction::Register
+        {
+            unregister_copy_hotkey(&app, &old.copy_hotkey);
+        }
+        apply_copy_hotkey(&app, &settings.copy_hotkey, settings.copy_hotkey_enabled);
     }
 
     Ok(settings)
@@ -78,8 +95,11 @@ pub fn apply_autostart(app: &AppHandle, enable: bool) {
     }
 }
 
-pub fn apply_hotkey(app: &AppHandle, hotkey: &str) {
-    if hotkey.is_empty() {
+pub fn apply_hotkey(app: &AppHandle, hotkey: &str, enabled: bool) {
+    // Nothing but `Register` is allowed to touch the shortcut manager here: an
+    // unset combo has nothing to bind, and a parked one keeps its combo string so
+    // the switch can simply turn it back on later.
+    if decide_hotkey_action(hotkey, enabled) != HotkeyAction::Register {
         return;
     }
     tracing::info!("registering global shortcut: '{hotkey}'");
@@ -109,8 +129,8 @@ fn unregister_hotkey(app: &AppHandle, hotkey: &str) {
     }
 }
 
-pub fn apply_popup_shortcut(app: &AppHandle, shortcut: &str) {
-    if shortcut.is_empty() {
+pub fn apply_popup_shortcut(app: &AppHandle, shortcut: &str, enabled: bool) {
+    if decide_hotkey_action(shortcut, enabled) != HotkeyAction::Register {
         return;
     }
     tracing::info!("registering popup shortcut: '{shortcut}'");
@@ -130,8 +150,8 @@ pub fn apply_popup_shortcut(app: &AppHandle, shortcut: &str) {
     }
 }
 
-pub fn apply_copy_hotkey(app: &AppHandle, hotkey: &str) {
-    if hotkey.is_empty() {
+pub fn apply_copy_hotkey(app: &AppHandle, hotkey: &str, enabled: bool) {
+    if decide_hotkey_action(hotkey, enabled) != HotkeyAction::Register {
         return;
     }
     tracing::info!("registering copy shortcut: '{hotkey}'");

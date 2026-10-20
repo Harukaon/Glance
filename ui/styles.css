@@ -462,6 +462,20 @@ body.capture-preparing *::after {
   color: var(--text-sub);
 }
 
+/* Enable switch after a shortcut (ui/hotkey-enable.mjs). The binding takes the
+   remaining width so the switches of all three rows sit on the same right edge. */
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hotkey-row .shortcut-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.hotkey-row .hotkey-enable { flex: 0 0 auto; }
+.shortcut-row.shortcut-off { opacity: 0.45; }
+
 /* Settings input fields (LLM config) */
 .settings-input {
   background: var(--bg-app);
