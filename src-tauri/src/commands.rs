@@ -419,9 +419,27 @@ pub async fn set_pin_on_top(app: AppHandle, pinned: bool) -> AppResult<()> {
     Ok(())
 }
 
+/// Two independent reasons to leave the main window alone, checked before any
+/// `set_size`:
+///  · a maximized window's size belongs to the desktop, and resizing it silently
+///    drops the maximized state (#23 — the reporter maximizes first);
+///  · a height that is not a positive finite number is not something `set_size`
+///    reports back as an error, it just collapses or distorts the window, so the
+///    request is refused rather than passed along.
+/// Kept as a plain predicate because no live window exists under `cargo test`, and
+/// because this stays the single place the main window's size is decided.
+fn should_skip_resize(is_maximized: bool, height: f64) -> bool {
+    is_maximized || !height.is_finite() || height <= 0.0
+}
+
 #[tauri::command]
 pub async fn resize_main_window(app: AppHandle, height: f64) -> AppResult<()> {
     if let Some(w) = app.get_webview_window("main") {
+        // Reading the maximized state can fail on a window that is being torn down;
+        // that is not a maximized window, so keep the previous behaviour and resize.
+        if should_skip_resize(w.is_maximized().unwrap_or(false), height) {
+            return Ok(());
+        }
         use tauri::LogicalSize;
         // Preserve the user's current (possibly manually-resized) width and only
         // adjust the height for the settings panel. Fall back to WIN_WIDTH if the
@@ -1617,5 +1635,34 @@ mod update_tag_tests {
         ] {
             assert_eq!(normalize_release_tag(bad), None, "should reject {:?}", bad);
         }
+    }
+}
+
+#[cfg(test)]
+mod resize_guard_tests {
+    use super::should_skip_resize;
+
+    #[test]
+    fn maximized_window_is_never_resized_by_the_panel() {
+        // 最大化那一半：无论高度多正常都不许动它。
+        assert!(should_skip_resize(true, 700.0));
+        assert!(should_skip_resize(true, 400.0));
+    }
+
+    #[test]
+    fn rejects_heights_set_size_would_swallow_silently() {
+        // 非最大化，但高度不是「一个正的可用的数」：这一半与最大化无关，
+        // 挡住的是另一类静默故障（把窗口压没，而不是报错）。
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(should_skip_resize(false, bad), "不该放行 {:?}", bad);
+        }
+    }
+
+    #[test]
+    fn ordinary_window_still_follows_the_panel() {
+        assert!(!should_skip_resize(false, 700.0));
+        // 前端量出来的高度是小数也照常放行：窗口最小高由窗口的 min_height 管，
+        // 这道闸只管「能不能用这个数」，不管它合不合适。
+        assert!(!should_skip_resize(false, 89.5));
     }
 }

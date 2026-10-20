@@ -2,6 +2,7 @@ import { focusTextInputIfAllowed } from "./focus-helpers.mjs";
 import { shouldTranslateOnInput, shouldTranslateOnEnter } from "./ime-guards.mjs";
 import { canRetranslateNow } from "./retranslate.mjs";
 import { isNewerVersion } from "./version.mjs";
+import { requiredHeight, nextHeight, grewAfterResize } from "./window-resize.mjs";
 
 const LANGUAGES = [
   { value: "auto", label: "自动检测" },
@@ -86,15 +87,20 @@ function settingsHeight() {
         parseFloat(sCs.marginBottom);
     });
 
-    // header + text-block + panel content, with two gaps between the three
-    // top-level blocks, plus the app container padding.
-    const total =
-      header.offsetHeight +
-      textBlock.offsetHeight +
-      panelContent +
-      appGap * 2 +
-      appPadding;
-    const measured = Math.ceil(total) + 2;
+    // The translation area contributes its CSS floor, never its measured height.
+    // With the panel open it is the only `flex-grow: 1` child, so offsetHeight is
+    // natural height + whatever the window has left over; adding that as a natural
+    // height made the total equal the current inner height, so every engine click
+    // asked for 2px more (#27). The panel above is measured as *content* for the
+    // same reason, spelled out in the comment over applyPin().
+    const textBlockMinH = parseFloat(getComputedStyle(textBlock).minHeight) || 0;
+    const measured = requiredHeight({
+      headerH: header.offsetHeight,
+      textBlockMinH,
+      sectionsH: panelContent,
+      gap: appGap,
+      padding: appPadding,
+    });
     if (measured > 0) return measured;
   }
   // Fallback estimate.
@@ -102,6 +108,28 @@ function settingsHeight() {
   if (state.settings?.textTranslateEngine === "llm") h += 200;
   if (state.settings?.proxyMode === "custom") h += 56;
   return h;
+}
+
+// Ask the window to resize only when the panel's content actually needs it, and
+// hand back exactly the height the panel cost us when it closes — never a snapshot
+// of the old size, because the #23 reporter grows the window *while* settings are
+// open in order to read a whole translation. null = leave the window alone.
+function applyPanelResize(panelOpen) {
+  const currentH = window.innerHeight;
+  const target = nextHeight({
+    currentH,
+    requiredH: panelOpen ? settingsHeight() : 0,
+    panelOpen,
+    rememberedH: state.panelRememberedH,
+    grew: state.panelGrew,
+  });
+  if (target === null) return;
+  // The bookkeeping is arithmetic, so it stays in the pure module: while the panel
+  // is open we only ever grow, and what we grow by is what close has to hand back.
+  state.panelGrew = panelOpen
+    ? grewAfterResize({ currentH, targetH: target, previousGrew: state.panelGrew })
+    : 0;
+  invoke?.("resize_main_window", { height: target }).catch(() => {});
 }
 
 let debounceTimer = null;
@@ -188,7 +216,12 @@ const state = {
   detectedLang: "",
   ttsPlaying: false,
   hotkeyRecording: false,
-  settingsOpen: false
+  settingsOpen: false,
+  // Two numbers the settings panel owns: the height it was opened from (the floor
+  // closing must not go under) and how much of the current height is ours (what
+  // closing hands back). Together they keep the window unchanged by settings (#23).
+  panelRememberedH: 0,
+  panelGrew: 0
 };
 
 function defaultSettings() {
@@ -619,17 +652,21 @@ function renderMain() {
 
   document.querySelector("#settings-btn").addEventListener("click", e => {
     e.stopPropagation();
-    state.settingsOpen = !state.settingsOpen;
+    const nextOpen = !state.settingsOpen;
+    // Both numbers are taken before anything moves the window: the height settings
+    // were opened from, and a fresh debt of nothing. Not a guess, and not the old
+    // hardcoded 400 (#23).
+    if (nextOpen) {
+      state.panelRememberedH = window.innerHeight;
+      state.panelGrew = 0;
+    }
+    state.settingsOpen = nextOpen;
     const panel = document.querySelector("#settings-panel");
     const btn = e.currentTarget;
     panel.style.display = state.settingsOpen ? "" : "none";
     document.querySelector(".bento-app")?.classList.toggle("settings-open", state.settingsOpen);
     btn.classList.toggle("open", state.settingsOpen);
-    if (state.settingsOpen) {
-      invoke?.("resize_main_window", { height: settingsHeight() }).catch(() => {});
-    } else {
-      invoke?.("resize_main_window", { height: 400 }).catch(() => {});
-    }
+    applyPanelResize(state.settingsOpen);
   });
 
   document.querySelector("#autostart").addEventListener("click", e => {
@@ -670,10 +707,9 @@ function renderMain() {
       const llmSettings = document.querySelector("#llm-settings");
       if (llmSettings) llmSettings.style.display = newEngine === "llm" ? "" : "none";
       // Resize window only while the settings panel is open; otherwise keep the
-      // compact translation view unchanged.
-      if (state.settingsOpen) {
-        invoke?.("resize_main_window", { height: settingsHeight() }).catch(() => {});
-      }
+      // compact translation view unchanged. Growing only — switching engines must
+      // never make the window taller when the content already fits (#27).
+      if (state.settingsOpen) applyPanelResize(true);
     });
   });
 
@@ -687,9 +723,7 @@ function renderMain() {
       document.querySelectorAll("#proxy-switcher .engine-btn").forEach(b => b.classList.toggle("active", b.dataset.proxy === newMode));
       const customRow = document.querySelector("#custom-proxy-row");
       if (customRow) customRow.style.display = newMode === "custom" ? "" : "none";
-      if (state.settingsOpen) {
-        invoke?.("resize_main_window", { height: settingsHeight() }).catch(() => {});
-      }
+      if (state.settingsOpen) applyPanelResize(true);
     });
   });
   const customProxyInput = document.querySelector("#custom-proxy");
@@ -1032,7 +1066,10 @@ async function boot() {
     state.status = `设置加载失败，已使用默认配置: ${err instanceof Error ? err.message : String(err)}`;
     state.statusType = "error";
   }
-  invoke?.("resize_main_window", { height: 400 }).catch(() => {});
+  // No height reset here. tauri.conf.json already creates the main window at
+  // 520x400, so re-asserting a hardcoded 400 was a second source of truth for a
+  // number the config owns — harmless today, and quietly overriding the config (or
+  // a restored window size, once there is one) the day either changes.
   renderMain();
 }
 
